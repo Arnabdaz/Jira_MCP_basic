@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "jira-mcp": {
+      "command": "uv",
+      "args": ["run", "jira-mcp"],
+      "cwd": "/path/to/your/jira-mcp",
+      "env": {
+        "JIRA_BASE_URL": "https://cloudera.atlassian.net",
+        "JIRA_EMAIL": "your-email@company.com",
+        "JIRA_API_TOKEN": "your-personal-api-token"
+      }
+    }
+  }
+} 
