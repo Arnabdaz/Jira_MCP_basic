@@ -233,5 +233,109 @@ class TestAsyncMethods:
         assert json_payload["body"]["content"][0]["type"] == "paragraph"
 
 
+@pytest.mark.asyncio
+class TestMCPFunctions:
+    """Test MCP tool functions directly"""
+
+    async def test_read_jira_issue_without_env(self):
+        """Test read_jira_issue MCP function without environment variables"""
+        from jira_mcp_server.server import read_jira_issue
+
+        # Clear environment variables
+        with patch.dict(os.environ, {}, clear=True):
+            result = await read_jira_issue("TEST-123")
+
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Missing required environment variables" in result["error"]
+
+    async def test_search_jira_issues_without_env(self):
+        """Test search_jira_issues MCP function without environment variables"""
+        from jira_mcp_server.server import search_jira_issues
+
+        # Clear environment variables
+        with patch.dict(os.environ, {}, clear=True):
+            result = await search_jira_issues("project = TEST", 25)
+
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Missing required environment variables" in result["error"]
+
+    async def test_get_my_work_without_env(self):
+        """Test get_my_work MCP function without environment variables"""
+        from jira_mcp_server.server import get_my_work
+
+        # Clear environment variables
+        with patch.dict(os.environ, {}, clear=True):
+            result = await get_my_work("In Progress")
+
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Missing required environment variables" in result["error"]
+
+        # Test without status filter
+        with patch.dict(os.environ, {}, clear=True):
+            result = await get_my_work()
+
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Missing required environment variables" in result["error"]
+
+    async def test_add_jira_comment_without_env(self):
+        """Test add_jira_comment MCP function without environment variables"""
+        from jira_mcp_server.server import add_jira_comment
+
+        # Clear environment variables
+        with patch.dict(os.environ, {}, clear=True):
+            result = await add_jira_comment("TEST-123", "Test comment")
+
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Missing required environment variables" in result["error"]
+
+
+class TestJiraClientMissingMethods:
+    """Test missing JiraClient method coverage"""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mocked client"""
+        config = JiraConfig(
+            base_url="https://test.atlassian.net",
+            email="test@example.com",
+            api_token="test-token",
+        )
+        client = JiraClient(config)
+        client.session = AsyncMock()
+        return client
+
+    async def test_get_my_work_success(self, mock_client):
+        """Test successful get_my_work method"""
+        mock_response = MagicMock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "issues": [
+                {
+                    "key": "TEST-123",
+                    "id": "12345",
+                    "fields": {
+                        "summary": "My work issue",
+                        "status": {"name": "In Progress"},
+                        "issuetype": {"name": "Task"},
+                        "project": {"key": "TEST"},
+                    },
+                }
+            ]
+        }
+        mock_client.session.request.return_value = mock_response
+
+        issues = await mock_client.get_my_work("In Progress")
+
+        assert len(issues) == 1
+        assert issues[0].key == "TEST-123"
+        assert issues[0].summary == "My work issue"
+        assert issues[0].status == "In Progress"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

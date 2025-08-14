@@ -20,7 +20,7 @@ async def test_jira_connection() -> None:
     if missing_vars:
         print(f"❌ Missing environment variables: {', '.join(missing_vars)}")
         print("\nPlease set these environment variables for personal API access:")
-        print("export JIRA_BASE_URL='https://cloudera.atlassian.net'")
+        print("export JIRA_BASE_URL='https://yourcompany.atlassian.net'")
         print("export JIRA_EMAIL='your-email@company.com'")
         print("export JIRA_API_TOKEN='your-personal-api-token'")
         print("\n🔑 Get your personal API token at:")

@@ -25,7 +25,7 @@ mcp = FastMCP("jira-mcp")
 class JiraConfig(BaseModel):
     """Configuration for Jira personal API access"""
 
-    base_url: str = Field(description="Jira base URL (e.g., https://cloudera.atlassian.net)")
+    base_url: str = Field(description="Jira base URL (e.g., https://yourcompany.atlassian.net)")
     email: str = Field(description="Your Jira account email")
     api_token: str = Field(description="Your personal Jira API token")
 

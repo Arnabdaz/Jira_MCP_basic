@@ -38,7 +38,7 @@ A modern Model Context Protocol (MCP) server for integrating with Jira Cloud usi
 3. **Set environment variables**:
 
    ```bash
-   export JIRA_BASE_URL="https://cloudera.atlassian.net"
+   export JIRA_BASE_URL="https://yourcompany.atlassian.net"
    export JIRA_EMAIL="your-email@company.com"
    export JIRA_API_TOKEN="your-personal-api-token"
    ```
@@ -66,9 +66,9 @@ To use with Claude Desktop, add this configuration to your `claude_desktop_confi
     "jira-mcp": {
       "command": "uv",
       "args": ["run", "jira-mcp"],
-      "cwd": "/path/to/your/jira-mcp",
+      "cwd": "/absolute/path/to/jira-mcp",
       "env": {
-        "JIRA_BASE_URL": "https://cloudera.atlassian.net",
+        "JIRA_BASE_URL": "https://yourcompany.atlassian.net",
         "JIRA_EMAIL": "your-email@company.com",
         "JIRA_API_TOKEN": "your-personal-api-token"
       }
@@ -77,7 +77,7 @@ To use with Claude Desktop, add this configuration to your `claude_desktop_confi
 }
 ```
 
-Replace `/path/to/your/jira-mcp` with the actual path to your jira-mcp directory.
+Replace `/absolute/path/to/jira-mcp` with the actual path to your jira-mcp directory.
 
 ### 🔑 Creating a Personal API Token
 
@@ -92,11 +92,11 @@ Replace `/path/to/your/jira-mcp` with the actual path to your jira-mcp directory
 
 The server requires three environment variables:
 
-| Variable         | Description             | Example                          |
-| ---------------- | ----------------------- | -------------------------------- |
-| `JIRA_BASE_URL`  | Your Jira instance URL  | `https://cloudera.atlassian.net` |
-| `JIRA_EMAIL`     | Your Jira account email | `john.doe@company.com`           |
-| `JIRA_API_TOKEN` | Your personal API token | `ATATT3xFfGF0T...`               |
+| Variable         | Description             | Example                             |
+| ---------------- | ----------------------- | ----------------------------------- |
+| `JIRA_BASE_URL`  | Your Jira instance URL  | `https://yourcompany.atlassian.net` |
+| `JIRA_EMAIL`     | Your Jira account email | `john.doe@company.com`              |
+| `JIRA_API_TOKEN` | Your personal API token | `ATATT3xFfGF0T...`                  |
 
 ### Making Environment Variables Persistent
 
@@ -104,7 +104,7 @@ Add these to your shell configuration (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ```bash
 # Jira MCP Server Configuration
-export JIRA_BASE_URL="https://cloudera.atlassian.net"
+export JIRA_BASE_URL="https://yourcompany.atlassian.net"
 export JIRA_EMAIL="your-email@company.com"
 export JIRA_API_TOKEN="your-personal-api-token"
 ```
