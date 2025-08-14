@@ -2,10 +2,12 @@
 Tests for the Jira MCP Server
 """
 
-import pytest
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
-from jira_mcp_server.server import JiraClient, JiraConfig, JiraApiError
+
+import pytest
+
+from jira_mcp_server.server import JiraClient, JiraConfig
 
 
 class TestJiraConfig:
@@ -113,10 +115,9 @@ class TestEnvironmentVariables:
     )
     def test_get_jira_client_with_env_vars(self):
         """Test getting client with environment variables"""
-        from jira_mcp_server.server import get_jira_client
-
         # Reset global client
         import jira_mcp_server.server
+        from jira_mcp_server.server import get_jira_client
 
         jira_mcp_server.server._jira_client = None
 
@@ -127,10 +128,9 @@ class TestEnvironmentVariables:
 
     def test_get_jira_client_missing_env_vars(self):
         """Test getting client with missing environment variables"""
-        from jira_mcp_server.server import get_jira_client
-
         # Reset global client
         import jira_mcp_server.server
+        from jira_mcp_server.server import get_jira_client
 
         jira_mcp_server.server._jira_client = None
 

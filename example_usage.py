@@ -4,12 +4,13 @@ Example usage script for the Jira MCP Server.
 This script demonstrates how to use the server tools with personal API access.
 """
 
-import os
 import asyncio
+import os
+
 from jira_mcp_server.server import get_jira_client
 
 
-async def test_jira_connection():
+async def test_jira_connection() -> None:
     """Test basic Jira connection and functionality with personal API access."""
 
     # Check if environment variables are set
@@ -54,9 +55,7 @@ async def test_jira_connection():
 
         # Test search functionality
         print("🔍 Testing search functionality...")
-        search_results = await client.search_issues(
-            "assignee = currentUser()", max_results=5
-        )
+        search_results = await client.search_issues("assignee = currentUser()", max_results=5)
         print(f"Search returned {len(search_results)} results")
 
         if search_results:
@@ -98,7 +97,7 @@ async def test_jira_connection():
         print("\n🎉 Your Jira MCP server is working perfectly!")
 
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Error: {e!s}")
         print("\n💡 Troubleshooting tips:")
         print("1. Check your API token is valid")
         print("2. Verify your email address is correct")

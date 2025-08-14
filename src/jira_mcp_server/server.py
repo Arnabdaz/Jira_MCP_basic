@@ -7,7 +7,7 @@ It supports reading issues, searching, commenting, and managing personal work.
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
@@ -107,7 +107,10 @@ class JiraClient:
         """Retrieve a specific Jira issue"""
         endpoint = f"issue/{issue_key}"
         params = {
-            "fields": "key,id,summary,status,assignee,reporter,priority,issuetype,created,updated,description,project",
+            "fields": (
+                "key,id,summary,status,assignee,reporter,priority,"
+                "issuetype,created,updated,description,project"
+            ),
             "expand": "renderedFields",
         }
 
@@ -277,7 +280,7 @@ def get_jira_client() -> JiraClient:
 
 
 @mcp.tool()
-async def read_jira_issue(issue_key: str) -> Dict[str, Any]:
+async def read_jira_issue(issue_key: str) -> dict[str, Any]:
     """Read a specific Jira issue by key (e.g., PROJ-123)"""
     try:
         client = get_jira_client()
@@ -300,16 +303,17 @@ async def read_jira_issue(issue_key: str) -> Dict[str, Any]:
 """
         return {"result": result}
     except Exception as e:
-        return {"error": f"❌ Error reading issue: {str(e)}"}
+        return {"error": f"❌ Error reading issue: {e!s}"}
 
 
 @mcp.tool()
-async def search_jira_issues(jql: str, max_results: int = 50) -> Dict[str, Any]:
+async def search_jira_issues(jql: str, max_results: int = 50) -> dict[str, Any]:
     """Search for Jira issues using JQL (Jira Query Language)"""
     try:
         # Validate max_results
         validated_max_results = max_results
-        if validated_max_results < 1 or validated_max_results > 100:
+        MAX_RESULTS_LIMIT = 100
+        if validated_max_results < 1 or validated_max_results > MAX_RESULTS_LIMIT:
             validated_max_results = 50
 
         client = get_jira_client()
@@ -325,17 +329,20 @@ async def search_jira_issues(jql: str, max_results: int = 50) -> Dict[str, Any]:
             result += f"## 🎫 {issue.key}: {issue.summary}\n"
             result += f"**🔗 Link:** {issue.url}\n"
             result += f"**📊 Status:** {issue.status} | **🏷️ Type:** {issue.issue_type}\n"
-            result += f"**📁 Project:** {issue.project} | **⚡ Priority:** {issue.priority or 'Not set'}\n"
+            result += (
+                f"**📁 Project:** {issue.project} | "
+                f"**⚡ Priority:** {issue.priority or 'Not set'}\n"
+            )
             result += f"**👤 Assignee:** {issue.assignee or 'Unassigned'}\n"
             result += f"**🔄 Updated:** {issue.updated}\n\n"
 
         return {"result": result}
     except Exception as e:
-        return {"error": f"❌ Error searching issues: {str(e)}"}
+        return {"error": f"❌ Error searching issues: {e!s}"}
 
 
 @mcp.tool()
-async def get_my_work(status_filter: str | None = None) -> Dict[str, Any]:
+async def get_my_work(status_filter: str | None = None) -> dict[str, Any]:
     """Get issues assigned to you (personal work queue)"""
     try:
         client = get_jira_client()
@@ -353,16 +360,19 @@ async def get_my_work(status_filter: str | None = None) -> Dict[str, Any]:
             result += f"## 🎫 {issue.key}: {issue.summary}\n"
             result += f"**🔗 Link:** {issue.url}\n"
             result += f"**📊 Status:** {issue.status} | **🏷️ Type:** {issue.issue_type}\n"
-            result += f"**📁 Project:** {issue.project} | **⚡ Priority:** {issue.priority or 'Not set'}\n"
+            result += (
+                f"**📁 Project:** {issue.project} | "
+                f"**⚡ Priority:** {issue.priority or 'Not set'}\n"
+            )
             result += f"**🔄 Updated:** {issue.updated}\n\n"
 
         return {"result": result}
     except Exception as e:
-        return {"error": f"❌ Error getting your work: {str(e)}"}
+        return {"error": f"❌ Error getting your work: {e!s}"}
 
 
 @mcp.tool()
-async def add_jira_comment(issue_key: str, comment: str) -> Dict[str, Any]:
+async def add_jira_comment(issue_key: str, comment: str) -> dict[str, Any]:
     """Add a comment to a Jira issue"""
     try:
         client = get_jira_client()
@@ -370,10 +380,10 @@ async def add_jira_comment(issue_key: str, comment: str) -> Dict[str, Any]:
 
         return {"result": f"✅ Comment added successfully to {issue_key}"}
     except Exception as e:
-        return {"error": f"❌ Error adding comment: {str(e)}"}
+        return {"error": f"❌ Error adding comment: {e!s}"}
 
 
-def main():
+def main() -> None:
     """Main entry point for the MCP server"""
     import argparse
 
