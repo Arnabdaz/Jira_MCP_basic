@@ -1,0 +1,146 @@
+"""ADF (Atlassian Document Format) to readable markdown converter."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def extract_text(adf_data: Any) -> str | None:
+    """Extract readable markdown text from ADF data, or return plain strings as-is."""
+    if adf_data is None:
+        return None
+    if isinstance(adf_data, str):
+        return adf_data
+    if isinstance(adf_data, dict):
+        if "content" in adf_data:
+            result = _process_nodes(adf_data["content"]).strip()
+            return result if result else None
+        if "text" in adf_data:
+            return str(adf_data["text"])
+    return None
+
+
+def _process_nodes(nodes: list[dict[str, Any]]) -> str:
+    return "".join(_process_node(n) for n in nodes)
+
+
+def _process_node(node: dict[str, Any]) -> str:  # noqa: PLR0911, PLR0912
+    node_type = node.get("type", "")
+    content: list[dict[str, Any]] = node.get("content", [])
+
+    if node_type == "text":
+        text: str = node.get("text", "")
+        marks = {m["type"] for m in node.get("marks", [])}
+        if "code" in marks:
+            text = f"`{text}`"
+        if "strong" in marks:
+            text = f"**{text}**"
+        if "em" in marks:
+            text = f"*{text}*"
+        if "strike" in marks:
+            text = f"~~{text}~~"
+        return text
+
+    if node_type == "paragraph":
+        return _process_nodes(content) + "\n\n"
+
+    if node_type == "heading":
+        level: int = node.get("attrs", {}).get("level", 1)
+        prefix = "#" * level
+        return f"{prefix} {_process_nodes(content).strip()}\n\n"
+
+    if node_type == "hardBreak":
+        return "\n"
+
+    if node_type == "rule":
+        return "---\n\n"
+
+    if node_type == "bulletList":
+        return _process_nodes(content)
+
+    if node_type == "orderedList":
+        return _process_ordered_list(content)
+
+    if node_type == "listItem":
+        inner = _process_nodes(content).strip()
+        return f"- {inner}\n"
+
+    if node_type == "codeBlock":
+        lang: str = node.get("attrs", {}).get("language", "")
+        inner = _process_nodes(content)
+        return f"```{lang}\n{inner}\n```\n\n"
+
+    if node_type == "blockquote":
+        inner = _process_nodes(content).strip()
+        quoted = "\n".join(f"> {line}" for line in inner.splitlines())
+        return f"{quoted}\n\n"
+
+    if node_type == "panel":
+        panel_type: str = node.get("attrs", {}).get("panelType", "info").upper()
+        inner = _process_nodes(content).strip()
+        quoted = "\n".join(f"> {line}" for line in inner.splitlines())
+        return f"> [{panel_type}]\n{quoted}\n\n"
+
+    if node_type == "table":
+        return _process_table(content)
+
+    if node_type in ("tableRow", "tableCell", "tableHeader"):
+        return _process_nodes(content)
+
+    if node_type == "mention":
+        display: str = node.get("attrs", {}).get("text", "unknown")
+        return f"@{display}"
+
+    if node_type in ("inlineCard", "blockCard"):
+        url: str = node.get("attrs", {}).get("url", "")
+        return f"{url} "
+
+    if node_type == "mediaSingle":
+        return _process_nodes(content)
+
+    if node_type == "media":
+        alt: str = node.get("attrs", {}).get("alt", "attachment")
+        return f"[{alt}]"
+
+    if node_type == "expand":
+        title: str = node.get("attrs", {}).get("title", "")
+        inner = _process_nodes(content).strip()
+        return f"**{title}**\n{inner}\n\n" if title else f"{inner}\n\n"
+
+    # Unknown node type — recurse into children if present
+    if content:
+        return _process_nodes(content)
+    return ""
+
+
+def _process_ordered_list(items: list[dict[str, Any]]) -> str:
+    parts = []
+    for i, item in enumerate(items, 1):
+        inner = _process_nodes(item.get("content", [])).strip()
+        parts.append(f"{i}. {inner}\n")
+    return "".join(parts) + "\n"
+
+
+def _process_table(rows: list[dict[str, Any]]) -> str:
+    table_rows: list[list[str]] = []
+    for row in rows:
+        if row.get("type") != "tableRow":
+            continue
+        cells = []
+        for cell in row.get("content", []):
+            if cell.get("type") in ("tableCell", "tableHeader"):
+                cells.append(_process_nodes(cell.get("content", [])).strip())
+        table_rows.append(cells)
+
+    if not table_rows:
+        return ""
+
+    max_cols = max(len(r) for r in table_rows)
+    lines = []
+    header = table_rows[0] + [""] * (max_cols - len(table_rows[0]))
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join(["---"] * max_cols) + " |")
+    for row in table_rows[1:]:
+        padded = row + [""] * (max_cols - len(row))
+        lines.append("| " + " | ".join(padded) + " |")
+    return "\n".join(lines) + "\n\n"
