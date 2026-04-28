@@ -125,20 +125,24 @@ class JiraClient:
             response.raise_for_status()
             if response.headers.get("content-type", "").startswith("application/json"):
                 return response.json()  # type: ignore[no-any-return]
+            msg = f"Unexpected non-JSON response (status {response.status_code})"
+            raise JiraApiError(msg, response.status_code)
         except httpx.HTTPStatusError as e:
             error_msg = f"Jira API error: {e.response.status_code}"
             try:
                 detail = e.response.json()
-                if "errorMessages" in detail:
-                    error_msg += f" - {'; '.join(detail['errorMessages'])}"
+                messages = detail.get("errorMessages", [])
+                errors = detail.get("errors", {})
+                if messages:
+                    error_msg += f" - {'; '.join(messages)}"
+                if errors:
+                    error_msg += f" - {errors}"
             except Exception:
                 error_msg += f" - {e.response.text}"
             raise JiraApiError(error_msg, e.response.status_code) from e
         except httpx.RequestError as e:
             msg = f"Network error: {e!s}"
             raise JiraApiError(msg) from e
-        else:
-            return {"result": response.text}
 
     async def get_issue(self, issue_key: str) -> JiraIssue:
         """Fetch a single issue with all fields needed for bug understanding."""
@@ -152,7 +156,6 @@ class JiraClient:
                     "labels,components,environment,issuelinks,attachment,"
                     "subtasks,parent,comment"
                 ),
-                "expand": "renderedFields",
             },
         )
         return self._parse_issue(data)
@@ -179,7 +182,6 @@ class JiraClient:
                     "issuetype",
                     "created",
                     "updated",
-                    "description",
                     "project",
                 ],
             },

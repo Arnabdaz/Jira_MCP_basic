@@ -126,6 +126,24 @@ class TestReadJiraIssue:
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await read_jira_issue("PROJ-1")
         assert "error.log" in result["result"]
+        assert "1 KB" in result["result"]
+
+    async def test_attachment_small_shown_in_bytes(self) -> None:
+        from jira_mcp_server.tools import read_jira_issue
+
+        attachments = [
+            JiraAttachment(
+                filename="small.txt",
+                url="https://test.atlassian.net/attach/2/small.txt",
+                size=512,
+                created="2024-01-01",
+            )
+        ]
+        mock_client = MagicMock()
+        mock_client.get_issue = AsyncMock(return_value=make_issue(attachments=attachments))
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            result = await read_jira_issue("PROJ-1")
+        assert "512 B" in result["result"]
 
     async def test_subtasks_shown(self) -> None:
         from jira_mcp_server.tools import read_jira_issue
@@ -237,6 +255,24 @@ class TestGetMyWork:
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work()
         assert "start_at=20" in result["result"]
+
+    async def test_status_filter_shown_in_output(self) -> None:
+        from jira_mcp_server.tools import get_my_work
+
+        mock_client = MagicMock()
+        mock_client.get_my_work = AsyncMock(return_value=([make_issue()], 1))
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            result = await get_my_work(status_filter="In Progress")
+        assert "In Progress" in result["result"]
+
+    async def test_empty_with_status_filter_shows_filter_in_message(self) -> None:
+        from jira_mcp_server.tools import get_my_work
+
+        mock_client = MagicMock()
+        mock_client.get_my_work = AsyncMock(return_value=([], 0))
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            result = await get_my_work(status_filter="Done")
+        assert "Done" in result["result"]
 
 
 # ---------------------------------------------------------------------------

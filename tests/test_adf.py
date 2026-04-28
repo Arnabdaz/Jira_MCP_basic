@@ -298,3 +298,187 @@ def test_hard_break() -> None:
     assert "line one" in result
     assert "line two" in result
     assert "\n" in result
+
+
+def test_rule() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [{"type": "rule"}],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "---" in result
+
+
+def test_panel() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "panel",
+                "attrs": {"panelType": "warning"},
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Watch out!"}],
+                    }
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "[WARNING]" in result
+    assert "Watch out!" in result
+
+
+def test_mention_adds_at_prefix() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "mention", "attrs": {"text": "Alice"}},
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "@Alice" in result
+
+
+def test_mention_no_double_at() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "mention", "attrs": {"text": "@Bob"}},
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "@Bob" in result
+    assert "@@Bob" not in result
+
+
+def test_inline_card_no_trailing_space() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "inlineCard", "attrs": {"url": "https://example.com"}},
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "https://example.com" in result
+    # URL should not have a trailing space injected before the paragraph newline
+    assert "https://example.com " not in result.replace("\n", "")
+
+
+def test_media_single_with_alt() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "mediaSingle",
+                "content": [
+                    {"type": "media", "attrs": {"alt": "screenshot.png"}},
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "[screenshot.png]" in result
+
+
+def test_expand_with_title() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "expand",
+                "attrs": {"title": "Details"},
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Hidden content"}],
+                    }
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "Details" in result
+    assert "Hidden content" in result
+
+
+def test_strike_mark() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "deleted", "marks": [{"type": "strike"}]}
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "~~deleted~~" in result
+
+
+def test_nested_bullet_list_indentation() -> None:
+    adf: dict[str, Any] = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "bulletList",
+                "content": [
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{"type": "text", "text": "Parent"}],
+                            },
+                            {
+                                "type": "bulletList",
+                                "content": [
+                                    {
+                                        "type": "listItem",
+                                        "content": [
+                                            {
+                                                "type": "paragraph",
+                                                "content": [
+                                                    {"type": "text", "text": "Child"}
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    result = extract_text(adf)
+    assert result is not None
+    assert "- Parent" in result
+    assert "  - Child" in result  # two-space indent for depth=1

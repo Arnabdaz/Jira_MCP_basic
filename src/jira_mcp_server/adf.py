@@ -20,11 +20,11 @@ def extract_text(adf_data: Any) -> str | None:
     return None
 
 
-def _process_nodes(nodes: list[dict[str, Any]]) -> str:
-    return "".join(_process_node(n) for n in nodes)
+def _process_nodes(nodes: list[dict[str, Any]], depth: int = 0) -> str:
+    return "".join(_process_node(n, depth) for n in nodes)
 
 
-def _process_node(node: dict[str, Any]) -> str:
+def _process_node(node: dict[str, Any], depth: int = 0) -> str:
     node_type = node.get("type", "")
     content: list[dict[str, Any]] = node.get("content", [])
 
@@ -42,12 +42,12 @@ def _process_node(node: dict[str, Any]) -> str:
         return text
 
     if node_type == "paragraph":
-        return _process_nodes(content) + "\n\n"
+        return _process_nodes(content, depth) + "\n\n"
 
     if node_type == "heading":
         level: int = node.get("attrs", {}).get("level", 1)
         prefix = "#" * level
-        return f"{prefix} {_process_nodes(content).strip()}\n\n"
+        return f"{prefix} {_process_nodes(content, depth).strip()}\n\n"
 
     if node_type == "hardBreak":
         return "\n"
@@ -56,14 +56,21 @@ def _process_node(node: dict[str, Any]) -> str:
         return "---\n\n"
 
     if node_type == "bulletList":
-        return _process_nodes(content)
+        return _process_nodes(content, depth)
 
     if node_type == "orderedList":
-        return _process_ordered_list(content)
+        return _process_ordered_list(content, depth)
 
     if node_type == "listItem":
-        inner = _process_nodes(content).strip()
-        return f"- {inner}\n"
+        lines = []
+        for child in content:
+            if child.get("type") in ("bulletList", "orderedList"):
+                lines.append(_process_node(child, depth + 1))
+            else:
+                lines.append(_process_node(child, depth))
+        inner = "".join(lines).strip()
+        indent = "  " * depth
+        return f"{indent}- {inner}\n"
 
     if node_type == "codeBlock":
         lang: str = node.get("attrs", {}).get("language", "")
@@ -89,11 +96,11 @@ def _process_node(node: dict[str, Any]) -> str:
 
     if node_type == "mention":
         display: str = node.get("attrs", {}).get("text", "unknown")
-        return f"@{display}"
+        return display if display.startswith("@") else f"@{display}"
 
     if node_type in ("inlineCard", "blockCard"):
         url: str = node.get("attrs", {}).get("url", "")
-        return f"{url} "
+        return url
 
     if node_type == "mediaSingle":
         return _process_nodes(content)
@@ -113,11 +120,18 @@ def _process_node(node: dict[str, Any]) -> str:
     return ""
 
 
-def _process_ordered_list(items: list[dict[str, Any]]) -> str:
+def _process_ordered_list(items: list[dict[str, Any]], depth: int = 0) -> str:
     parts = []
+    indent = "  " * depth
     for i, item in enumerate(items, 1):
-        inner = _process_nodes(item.get("content", [])).strip()
-        parts.append(f"{i}. {inner}\n")
+        lines = []
+        for child in item.get("content", []):
+            if child.get("type") in ("bulletList", "orderedList"):
+                lines.append(_process_node(child, depth + 1))
+            else:
+                lines.append(_process_node(child, depth))
+        inner = "".join(lines).strip()
+        parts.append(f"{indent}{i}. {inner}\n")
     return "".join(parts) + "\n"
 
 

@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Editor and OS files
+.DS_Store
+.history/
+
+# Plan/brainstorm artifacts
+docs/superpowers/

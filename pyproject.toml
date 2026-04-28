@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
@@ -39,7 +40,7 @@ dev = [
 ]
 
 [project.scripts]
-jira-mcp = "jira_mcp_server.server:cli_main"
+jira-mcp = "jira_mcp_server.server:main"
 
 [project.urls]
 Homepage = "https://github.com/Arnabdaz/Jira_MCP_basic"

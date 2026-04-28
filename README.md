@@ -26,6 +26,7 @@ All tools are read-only (`readOnlyHint: true`).
 1. **Clone and setup**:
 
    ```bash
+   git clone https://github.com/Arnabdaz/Jira_MCP_basic.git jira-mcp
    cd jira-mcp
    ./setup.sh
    ```
@@ -46,7 +47,9 @@ All tools are read-only (`readOnlyHint: true`).
 
 4. **Run the MCP server**:
    ```bash
-   uv run jira-mcp
+   uv run jira-mcp                        # stdio (default)
+   uv run jira-mcp --transport sse        # SSE
+   uv run jira-mcp --transport streamable-http  # Streamable HTTP
    ```
 
 ### Claude Desktop / Claude Code Integration
@@ -166,13 +169,13 @@ assignee = currentUser() AND updated >= -7d ORDER BY updated DESC
 jira-mcp/
 ├── pyproject.toml
 ├── uv.lock
-├── main.py
 ├── example_usage.py
 ├── src/
 │   └── jira_mcp_server/
 │       ├── __init__.py
-│       ├── server.py        # Entry point
-│       ├── app.py           # FastMCP instance
+│       ├── __main__.py      # python -m jira_mcp_server support
+│       ├── server.py        # Entry point + CLI argument parsing
+│       ├── app.py           # FastMCP instance + lifespan hook
 │       ├── tools.py         # MCP tool definitions
 │       ├── client.py        # JiraClient + data models
 │       └── adf.py           # ADF → markdown converter
@@ -193,6 +196,12 @@ uv run pytest
 
 # Lint
 uv run ruff check src/ tests/
+
+# Type check
+uv run mypy src/
+
+# Format
+uv run black src/ tests/
 ```
 
 ## Troubleshooting

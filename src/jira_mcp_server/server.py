@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Jira MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "streamable-http"],
         default="stdio",
         help="Transport mechanism (default: stdio)",
     )
@@ -28,10 +28,5 @@ def main() -> None:
     mcp.run(transport=args.transport)
 
 
-def cli_main() -> None:
-    """Console script entry point."""
-    main()
-
-
 if __name__ == "__main__":
-    cli_main()
+    main()

@@ -415,14 +415,44 @@ class TestAsyncMethods:
         mock_resp.status_code = 404
         mock_resp.json.return_value = {"errorMessages": ["Issue not found"]}
         mock_resp.text = "Not Found"
-        self.client.session.request = AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "404", request=MagicMock(), response=mock_resp
-            )
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404", request=MagicMock(), response=mock_resp
         )
+        self.client.session.request = AsyncMock(return_value=mock_resp)
         with pytest.raises(JiraApiError) as exc_info:
             await self.client.get_issue("PROJ-999")
         assert "404" in str(exc_info.value)
+        assert "Issue not found" in str(exc_info.value)
+
+    async def test_http_error_includes_errors_dict(self) -> None:
+        import httpx
+
+        self.client.session = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {
+            "errorMessages": [],
+            "errors": {"summary": "Field required"},
+        }
+        mock_resp.text = "Bad Request"
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "400", request=MagicMock(), response=mock_resp
+        )
+        self.client.session.request = AsyncMock(return_value=mock_resp)
+        with pytest.raises(JiraApiError) as exc_info:
+            await self.client.get_issue("PROJ-999")
+        assert "summary" in str(exc_info.value)
+
+    async def test_non_json_response_raises_error(self) -> None:
+        self.client.session = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/html"}
+        mock_resp.raise_for_status = MagicMock()  # does not raise
+        self.client.session.request = AsyncMock(return_value=mock_resp)
+        with pytest.raises(JiraApiError) as exc_info:
+            await self.client.get_issue("PROJ-1")
+        assert "non-JSON" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
