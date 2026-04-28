@@ -125,18 +125,20 @@ class JiraClient:
             response.raise_for_status()
             if response.headers.get("content-type", "").startswith("application/json"):
                 return response.json()  # type: ignore[no-any-return]
-            return {"result": response.text}
         except httpx.HTTPStatusError as e:
             error_msg = f"Jira API error: {e.response.status_code}"
             try:
                 detail = e.response.json()
                 if "errorMessages" in detail:
                     error_msg += f" - {'; '.join(detail['errorMessages'])}"
-            except Exception:  # noqa: BLE001
+            except Exception:
                 error_msg += f" - {e.response.text}"
             raise JiraApiError(error_msg, e.response.status_code) from e
         except httpx.RequestError as e:
-            raise JiraApiError(f"Network error: {e!s}") from e
+            msg = f"Network error: {e!s}"
+            raise JiraApiError(msg) from e
+        else:
+            return {"result": response.text}
 
     async def get_issue(self, issue_key: str) -> JiraIssue:
         """Fetch a single issue with all fields needed for bug understanding."""
@@ -195,7 +197,8 @@ class JiraClient:
         """Return issues assigned to the current user, ordered by last updated."""
         jql = "assignee = currentUser()"
         if status_filter:
-            jql += f" AND status = '{status_filter}'"
+            safe_status = status_filter.replace("\\", "\\\\").replace("'", "\\'")
+            jql += f" AND status = '{safe_status}'"
         jql += " ORDER BY updated DESC"
         return await self.search_issues(jql, max_results=max_results, start_at=start_at)
 
@@ -214,8 +217,22 @@ class JiraClient:
 
     async def get_projects(self) -> list[JiraProject]:
         """Return all Jira projects accessible to the authenticated user."""
-        data = await self._request("GET", "project/search", params={"maxResults": 50})
-        return [self._parse_project(p) for p in data.get("values", [])]
+        projects: list[JiraProject] = []
+        start_at = 0
+        page_size = 50
+        while True:
+            data = await self._request(
+                "GET",
+                "project/search",
+                params={"maxResults": page_size, "startAt": start_at},
+            )
+            values = data.get("values", [])
+            projects.extend(self._parse_project(p) for p in values)
+            total: int = data.get("total", 0)
+            start_at += len(values)
+            if start_at >= total or not values:
+                break
+        return projects
 
     # ------------------------------------------------------------------
     # Parsing helpers
@@ -345,10 +362,11 @@ def get_jira_client() -> JiraClient:
                 ]
                 if not val
             ]
-            raise ValueError(
+            msg = (
                 f"Missing required environment variables: {', '.join(missing)}\n"
                 "Please set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN."
             )
+            raise ValueError(msg)
 
         _jira_client = JiraClient(
             JiraConfig(

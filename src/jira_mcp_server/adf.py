@@ -24,7 +24,7 @@ def _process_nodes(nodes: list[dict[str, Any]]) -> str:
     return "".join(_process_node(n) for n in nodes)
 
 
-def _process_node(node: dict[str, Any]) -> str:  # noqa: PLR0911, PLR0912
+def _process_node(node: dict[str, Any]) -> str:
     node_type = node.get("type", "")
     content: list[dict[str, Any]] = node.get("content", [])
 
@@ -126,10 +126,11 @@ def _process_table(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         if row.get("type") != "tableRow":
             continue
-        cells = []
-        for cell in row.get("content", []):
-            if cell.get("type") in ("tableCell", "tableHeader"):
-                cells.append(_process_nodes(cell.get("content", [])).strip())
+        cells = [
+            _process_nodes(cell.get("content", [])).strip()
+            for cell in row.get("content", [])
+            if cell.get("type") in ("tableCell", "tableHeader")
+        ]
         table_rows.append(cells)
 
     if not table_rows:
@@ -140,7 +141,7 @@ def _process_table(rows: list[dict[str, Any]]) -> str:
     header = table_rows[0] + [""] * (max_cols - len(table_rows[0]))
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join(["---"] * max_cols) + " |")
-    for row in table_rows[1:]:
-        padded = row + [""] * (max_cols - len(row))
+    for data_row in table_rows[1:]:
+        padded = data_row + [""] * (max_cols - len(data_row))
         lines.append("| " + " | ".join(padded) + " |")
     return "\n".join(lines) + "\n\n"

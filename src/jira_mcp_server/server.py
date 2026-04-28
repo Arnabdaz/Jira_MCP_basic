@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 
 from .app import mcp
@@ -15,8 +16,6 @@ from . import tools  # noqa: E402, F401
 
 def main() -> None:
     """Parse CLI arguments and start the MCP server."""
-    import argparse
-
     parser = argparse.ArgumentParser(description="Jira MCP Server")
     parser.add_argument(
         "--transport",

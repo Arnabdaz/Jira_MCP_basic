@@ -11,17 +11,9 @@ from pydantic import ValidationError
 
 from jira_mcp_server.client import (
     JiraApiError,
-    JiraAttachment,
     JiraClient,
-    JiraComment,
     JiraConfig,
-    JiraIssue,
-    JiraLinkedIssue,
-    JiraProject,
-    JiraSubTask,
-    get_jira_client,
 )
-
 
 # ---------------------------------------------------------------------------
 # TestJiraConfig

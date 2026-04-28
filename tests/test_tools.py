@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from jira_mcp_server.client import (
     JiraAttachment,
     JiraComment,
@@ -14,7 +12,6 @@ from jira_mcp_server.client import (
     JiraProject,
     JiraSubTask,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

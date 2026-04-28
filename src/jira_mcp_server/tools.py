@@ -10,6 +10,7 @@ from .app import mcp
 from .client import get_jira_client
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
+_BYTES_PER_KB = 1024
 
 
 @mcp.tool(annotations=_READ_ONLY)
@@ -57,7 +58,8 @@ async def read_jira_issue(issue_key: str) -> dict[str, Any]:
         if issue.attachments:
             lines += ["", "## Attachments"]
             for att in issue.attachments:
-                lines.append(f"- [{att.filename}]({att.url}) ({att.size // 1024} KB)")
+                size_str = f"{att.size} B" if att.size < _BYTES_PER_KB else f"{att.size // _BYTES_PER_KB} KB"
+                lines.append(f"- [{att.filename}]({att.url}) ({size_str})")
 
         if issue.sub_tasks:
             lines += ["", "## Sub-tasks"]
@@ -71,7 +73,7 @@ async def read_jira_issue(issue_key: str) -> dict[str, Any]:
             ]
 
         return {"result": "\n".join(lines)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"error": f"Error reading issue: {e!s}"}
 
 
@@ -107,7 +109,7 @@ async def search_jira_issues(
         lines: list[str] = [
             "# Search Results",
             f"**JQL:** `{jql}`",
-            f"Showing {start_at + 1}–{end} of {total}",
+            f"Showing {start_at + 1}-{end} of {total}",
             "",
         ]
         for issue in issues:
@@ -124,7 +126,7 @@ async def search_jira_issues(
                 f"*More results available. Call again with `start_at={end}` to get the next page.*"
             )
         return {"result": "\n".join(lines)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"error": f"Error searching issues: {e!s}"}
 
 
@@ -140,19 +142,20 @@ async def get_my_work(
 
     Args:
         status_filter: Jira status name to filter by (optional).
-        max_results: Number of results per page (default 20).
+        max_results: Number of results per page (1-100, default 20).
         start_at: Zero-based offset for pagination (default 0).
     """
     try:
+        validated_max = max(1, min(max_results, 100))
         client = get_jira_client()
-        issues, total = await client.get_my_work(status_filter, max_results, start_at)
+        issues, total = await client.get_my_work(status_filter, validated_max, start_at)
 
         if not issues:
             suffix = f" with status '{status_filter}'" if status_filter else ""
             return {"result": f"No assigned issues found{suffix}."}
 
         end = start_at + len(issues)
-        lines: list[str] = ["# My Work", f"Showing {start_at + 1}–{end} of {total}"]
+        lines: list[str] = ["# My Work", f"Showing {start_at + 1}-{end} of {total}"]
         if status_filter:
             lines.append(f"**Status Filter:** {status_filter}")
         lines.append("")
@@ -171,7 +174,7 @@ async def get_my_work(
                 f"*More results available. Call again with `start_at={end}` to get the next page.*"
             )
         return {"result": "\n".join(lines)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"error": f"Error getting work: {e!s}"}
 
 
@@ -187,12 +190,13 @@ async def get_issue_comments(
 
     Args:
         issue_key: The issue key (e.g., PROJ-123).
-        max_results: Number of comments per page (default 20).
+        max_results: Number of comments per page (1-100, default 20).
         start_at: Zero-based offset for pagination (default 0).
     """
     try:
+        validated_max = max(1, min(max_results, 100))
         client = get_jira_client()
-        comments, total = await client.get_issue_comments(issue_key, max_results, start_at)
+        comments, total = await client.get_issue_comments(issue_key, validated_max, start_at)
 
         if not comments:
             return {"result": f"No comments found on {issue_key}."}
@@ -200,7 +204,7 @@ async def get_issue_comments(
         end = start_at + len(comments)
         lines: list[str] = [
             f"# Comments on {issue_key}",
-            f"Showing {start_at + 1}–{end} of {total}",
+            f"Showing {start_at + 1}-{end} of {total}",
             "",
         ]
         for comment in comments:
@@ -215,7 +219,7 @@ async def get_issue_comments(
                 f"*More comments available. Call again with `start_at={end}` to get the next page.*"
             )
         return {"result": "\n".join(lines)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"error": f"Error getting comments: {e!s}"}
 
 
@@ -241,5 +245,5 @@ async def get_projects() -> dict[str, Any]:
                 f"- **{project.key}** — {project.name} ({project.project_type}){lead_str}"
             )
         return {"result": "\n".join(lines)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"error": f"Error getting projects: {e!s}"}

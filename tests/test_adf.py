@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from jira_mcp_server.adf import extract_text
 
 
