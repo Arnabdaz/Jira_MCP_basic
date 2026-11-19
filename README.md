@@ -103,15 +103,16 @@ Returns: summary, status, type, priority, assignee, reporter, description, label
 
 ### `search_jira_issues`
 
-Search using JQL with pagination.
+Search using JQL with pagination. The JQL must be **bounded** (include at least
+one search restriction, e.g. `project = PROJ`); a bare `ORDER BY created DESC` is
+rejected by Jira.
 
 ```json
 {
   "tool": "search_jira_issues",
   "arguments": {
     "jql": "project = PROJ AND status = 'In Progress'",
-    "max_results": 20,
-    "start_at": 0
+    "max_results": 20
   }
 }
 ```
@@ -123,7 +124,7 @@ Issues assigned to the authenticated user, ordered by last updated.
 ```json
 {
   "tool": "get_my_work",
-  "arguments": { "status_filter": "In Progress", "max_results": 20, "start_at": 0 }
+  "arguments": { "status_filter": "In Progress", "max_results": 20 }
 }
 ```
 
@@ -148,11 +149,33 @@ List all accessible Jira projects (key, name, type, lead).
 
 ## Pagination
 
-`search_jira_issues`, `get_my_work`, and `get_issue_comments` all support `start_at` for pagination. When there are more results, the response includes:
+`search_jira_issues` and `get_my_work` use Jira's enhanced search
+(`POST /rest/api/3/search/jql`), which paginates with an opaque token. When there
+are more results, the response ends with the exact token to pass back:
+
+```
+More results available. Call again with `page_token="<token>"` to get the next page.
+```
+
+The first page also shows an approximate total (from
+`POST /rest/api/3/search/approximate-count`). Tokens expire after 7 days.
+
+`get_issue_comments` still uses offset pagination via `start_at`:
 
 ```
 More results available. Call again with `start_at=20` to get the next page.
 ```
+
+### Jira API endpoints used
+
+All calls go to Jira Cloud REST API v3:
+
+| Tool | Endpoint |
+|------|----------|
+| `read_jira_issue` | `GET /rest/api/3/issue/{key}` |
+| `search_jira_issues`, `get_my_work` | `POST /rest/api/3/search/jql`, `POST /rest/api/3/search/approximate-count` |
+| `get_issue_comments` | `GET /rest/api/3/issue/{key}/comment` |
+| `get_projects` | `GET /rest/api/3/project/search` |
 
 ## JQL Examples
 

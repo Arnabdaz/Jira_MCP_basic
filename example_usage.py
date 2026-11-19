@@ -37,10 +37,11 @@ async def test_jira_connection() -> None:
     try:
         print("Jira client initialized successfully")
 
-        # Test getting user's work (returns tuple: issues, total)
+        # Test getting user's work (returns a JiraSearchPage; total is approximate)
         print("\nTesting 'get_my_work' functionality...")
-        issues, total = await client.get_my_work()
-        print(f"Found {total} issues assigned to you (showing {len(issues)})")
+        my_work = await client.get_my_work()
+        issues = my_work.issues
+        print(f"Found about {my_work.total} issues assigned to you (showing {len(issues)})")
 
         if issues:
             print("\nYour top 3 issues:")
@@ -53,12 +54,16 @@ async def test_jira_connection() -> None:
                 print(f"     URL: {issue.url}")
                 print()
 
-        # Test search functionality (returns tuple: issues, total)
+        # Test search functionality (enhanced search, token-based pagination)
         print("Testing search functionality...")
-        search_results, search_total = await client.search_issues(
-            "assignee = currentUser()", max_results=5
-        )
-        print(f"Search returned {search_total} total results (showing {len(search_results)})")
+        search_page = await client.search_issues("assignee = currentUser()", max_results=5)
+        shown = len(search_page.issues)
+        print(f"Search returned about {search_page.total} results (showing {shown})")
+        if search_page.next_page_token:
+            next_page = await client.search_issues(
+                "assignee = currentUser()", max_results=5, page_token=search_page.next_page_token
+            )
+            print(f"Next page returned {len(next_page.issues)} more results")
 
         # Test reading a specific issue with full detail
         if issues:

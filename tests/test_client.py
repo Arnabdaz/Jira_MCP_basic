@@ -322,41 +322,99 @@ class TestAsyncMethods:
         mock_resp.json.return_value = json_data
         return mock_resp
 
-    async def test_search_issues_returns_tuple_with_total(self) -> None:
-        self.client.session = AsyncMock()
-        self.client.session.request = AsyncMock(
-            return_value=self._mock_response(
-                {
-                    "total": 5,
-                    "startAt": 0,
-                    "maxResults": 20,
-                    "issues": [
-                        {
-                            "key": "PROJ-1",
-                            "id": "1",
-                            "fields": _minimal_issue_data()["fields"],
-                        }
-                    ],
-                }
-            )
-        )
-        issues, total = await self.client.search_issues("project = PROJ")
-        assert total == 5
-        assert len(issues) == 1
-        assert issues[0].key == "PROJ-1"
+    def _route_search(
+        self,
+        search_data: dict[str, Any],
+        count_data: dict[str, Any] | None = None,
+        count_error: Exception | None = None,
+    ) -> None:
+        """Route mocked requests by URL: enhanced search vs. approximate count."""
 
-    async def test_search_issues_pagination_params_sent(self) -> None:
+        async def handler(_method: str, url: str, **_kwargs: Any) -> MagicMock:
+            if url.endswith("search/approximate-count"):
+                if count_error is not None:
+                    raise count_error
+                return self._mock_response(count_data or {"count": 0})
+            return self._mock_response(search_data)
+
         self.client.session = AsyncMock()
-        self.client.session.request = AsyncMock(
-            return_value=self._mock_response(
-                {"total": 0, "startAt": 20, "maxResults": 10, "issues": []}
-            )
+        self.client.session.request = AsyncMock(side_effect=handler)
+
+    def _calls_to(self, suffix: str) -> list[Any]:
+        return [c for c in self.client.session.request.call_args_list if c.args[1].endswith(suffix)]
+
+    async def test_search_issues_uses_enhanced_search_endpoint(self) -> None:
+        """POST /rest/api/3/search was removed; enhanced search is /search/jql."""
+        self._route_search(
+            {
+                "isLast": True,
+                "issues": [{"key": "PROJ-1", "id": "1", "fields": _minimal_issue_data()["fields"]}],
+            },
+            count_data={"count": 5},
         )
-        await self.client.search_issues("project = PROJ", max_results=10, start_at=20)
-        call_kwargs = self.client.session.request.call_args
-        body = call_kwargs.kwargs.get("json") or {}
-        assert body["startAt"] == 20
+        page = await self.client.search_issues("project = PROJ", max_results=10)
+
+        search_calls = self._calls_to("rest/api/3/search/jql")
+        assert len(search_calls) == 1
+        assert search_calls[0].args[0] == "POST"
+        body = search_calls[0].kwargs["json"]
+        assert body["jql"] == "project = PROJ"
         assert body["maxResults"] == 10
+        assert "summary" in body["fields"]  # enhanced search returns only ids by default
+        assert "startAt" not in body  # offset pagination is not supported
+        assert "nextPageToken" not in body  # first page
+        assert len(page.issues) == 1
+        assert page.issues[0].key == "PROJ-1"
+        assert page.total == 5
+        assert page.next_page_token is None
+
+    async def test_search_issues_first_page_requests_approximate_count(self) -> None:
+        self._route_search({"isLast": True, "issues": []}, count_data={"count": 42})
+        page = await self.client.search_issues("project = PROJ")
+        count_calls = self._calls_to("rest/api/3/search/approximate-count")
+        assert len(count_calls) == 1
+        assert count_calls[0].args[0] == "POST"
+        assert count_calls[0].kwargs["json"] == {"jql": "project = PROJ"}
+        assert page.total == 42
+
+    async def test_search_issues_next_page_sends_token_and_skips_count(self) -> None:
+        self._route_search({"isLast": True, "issues": []})
+        page = await self.client.search_issues("project = PROJ", page_token="tok-2")
+        body = self._calls_to("rest/api/3/search/jql")[0].kwargs["json"]
+        assert body["nextPageToken"] == "tok-2"
+        assert self._calls_to("search/approximate-count") == []
+        assert page.total is None
+
+    async def test_search_issues_returns_next_page_token_when_more(self) -> None:
+        self._route_search({"isLast": False, "nextPageToken": "tok-2", "issues": []})
+        page = await self.client.search_issues("project = PROJ")
+        assert page.next_page_token == "tok-2"
+
+    async def test_search_issues_ignores_token_on_last_page(self) -> None:
+        self._route_search({"isLast": True, "nextPageToken": "stale", "issues": []})
+        page = await self.client.search_issues("project = PROJ")
+        assert page.next_page_token is None
+
+    async def test_search_issues_count_failure_is_non_fatal(self) -> None:
+        self._route_search(
+            {
+                "isLast": True,
+                "issues": [{"key": "PROJ-1", "id": "1", "fields": _minimal_issue_data()["fields"]}],
+            },
+            count_error=JiraApiError("Jira API error: 500", 500),
+        )
+        page = await self.client.search_issues("project = PROJ")
+        assert len(page.issues) == 1
+        assert page.total is None
+
+    async def test_get_my_work_uses_bounded_jql_and_forwards_token(self) -> None:
+        self._route_search({"isLast": True, "issues": []})
+        await self.client.get_my_work("In Progress", max_results=5, page_token="tok-3")
+        body = self._calls_to("rest/api/3/search/jql")[0].kwargs["json"]
+        assert body["jql"].startswith("assignee = currentUser()")
+        assert "status = 'In Progress'" in body["jql"]
+        assert body["maxResults"] == 5
+        assert body["nextPageToken"] == "tok-3"
 
     async def test_get_issue_comments_returns_tuple_with_total(self) -> None:
         self.client.session = AsyncMock()

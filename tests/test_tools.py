@@ -10,6 +10,7 @@ from jira_mcp_server.client import (
     JiraIssue,
     JiraLinkedIssue,
     JiraProject,
+    JiraSearchPage,
     JiraSubTask,
 )
 
@@ -186,18 +187,31 @@ class TestSearchJiraIssues:
 
         issues = [make_issue(key=f"PROJ-{i}") for i in range(1, 21)]
         mock_client = MagicMock()
-        mock_client.search_issues = AsyncMock(return_value=(issues, 50))
+        mock_client.search_issues = AsyncMock(
+            return_value=JiraSearchPage(issues=issues, next_page_token="tok-2", total=50)
+        )
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await search_jira_issues("project = PROJ")
         assert "result" in result
-        assert "start_at=20" in result["result"]
+        assert 'page_token="tok-2"' in result["result"]
         assert "50" in result["result"]
+
+    async def test_page_token_forwarded_to_client(self) -> None:
+        from jira_mcp_server.tools import search_jira_issues
+
+        mock_client = MagicMock()
+        mock_client.search_issues = AsyncMock(
+            return_value=JiraSearchPage(issues=[make_issue()], next_page_token=None)
+        )
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            await search_jira_issues("project = PROJ", max_results=5, page_token="tok-2")
+        mock_client.search_issues.assert_awaited_once_with("project = PROJ", 5, "tok-2")
 
     async def test_empty_results(self) -> None:
         from jira_mcp_server.tools import search_jira_issues
 
         mock_client = MagicMock()
-        mock_client.search_issues = AsyncMock(return_value=([], 0))
+        mock_client.search_issues = AsyncMock(return_value=JiraSearchPage(issues=[], total=0))
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await search_jira_issues("project = NONE")
         assert "No issues found" in result["result"]
@@ -206,10 +220,24 @@ class TestSearchJiraIssues:
         from jira_mcp_server.tools import search_jira_issues
 
         mock_client = MagicMock()
-        mock_client.search_issues = AsyncMock(return_value=([make_issue()], 1))
+        mock_client.search_issues = AsyncMock(
+            return_value=JiraSearchPage(issues=[make_issue()], total=1)
+        )
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await search_jira_issues("project = PROJ")
-        assert "start_at=" not in result["result"]
+        assert "page_token=" not in result["result"]
+
+    async def test_unknown_total_still_renders(self) -> None:
+        from jira_mcp_server.tools import search_jira_issues
+
+        mock_client = MagicMock()
+        mock_client.search_issues = AsyncMock(
+            return_value=JiraSearchPage(issues=[make_issue()], next_page_token="t", total=None)
+        )
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            result = await search_jira_issues("project = PROJ")
+        assert "PROJ-1" in result["result"]
+        assert "None" not in result["result"]
 
     async def test_error_returns_error_key(self) -> None:
         from jira_mcp_server.tools import search_jira_issues
@@ -232,7 +260,9 @@ class TestGetMyWork:
         from jira_mcp_server.tools import get_my_work
 
         mock_client = MagicMock()
-        mock_client.get_my_work = AsyncMock(return_value=([make_issue()], 1))
+        mock_client.get_my_work = AsyncMock(
+            return_value=JiraSearchPage(issues=[make_issue()], total=1)
+        )
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work()
         assert "PROJ-1" in result["result"]
@@ -241,7 +271,7 @@ class TestGetMyWork:
         from jira_mcp_server.tools import get_my_work
 
         mock_client = MagicMock()
-        mock_client.get_my_work = AsyncMock(return_value=([], 0))
+        mock_client.get_my_work = AsyncMock(return_value=JiraSearchPage(issues=[], total=0))
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work()
         assert "No assigned issues" in result["result"]
@@ -251,16 +281,29 @@ class TestGetMyWork:
 
         issues = [make_issue(key=f"PROJ-{i}") for i in range(20)]
         mock_client = MagicMock()
-        mock_client.get_my_work = AsyncMock(return_value=(issues, 45))
+        mock_client.get_my_work = AsyncMock(
+            return_value=JiraSearchPage(issues=issues, next_page_token="tok-2", total=45)
+        )
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work()
-        assert "start_at=20" in result["result"]
+        assert 'page_token="tok-2"' in result["result"]
+
+    async def test_page_token_forwarded_to_client(self) -> None:
+        from jira_mcp_server.tools import get_my_work
+
+        mock_client = MagicMock()
+        mock_client.get_my_work = AsyncMock(return_value=JiraSearchPage(issues=[make_issue()]))
+        with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
+            await get_my_work(status_filter="Open", max_results=7, page_token="tok-2")
+        mock_client.get_my_work.assert_awaited_once_with("Open", 7, "tok-2")
 
     async def test_status_filter_shown_in_output(self) -> None:
         from jira_mcp_server.tools import get_my_work
 
         mock_client = MagicMock()
-        mock_client.get_my_work = AsyncMock(return_value=([make_issue()], 1))
+        mock_client.get_my_work = AsyncMock(
+            return_value=JiraSearchPage(issues=[make_issue()], total=1)
+        )
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work(status_filter="In Progress")
         assert "In Progress" in result["result"]
@@ -269,7 +312,7 @@ class TestGetMyWork:
         from jira_mcp_server.tools import get_my_work
 
         mock_client = MagicMock()
-        mock_client.get_my_work = AsyncMock(return_value=([], 0))
+        mock_client.get_my_work = AsyncMock(return_value=JiraSearchPage(issues=[], total=0))
         with patch("jira_mcp_server.tools.get_jira_client", return_value=mock_client):
             result = await get_my_work(status_filter="Done")
         assert "Done" in result["result"]

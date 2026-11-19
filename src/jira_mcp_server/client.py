@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 from urllib.parse import urljoin
@@ -92,6 +93,19 @@ class JiraProject(BaseModel):
     lead: str | None = None
 
 
+class JiraSearchPage(BaseModel):
+    """One page of JQL search results from the enhanced search API.
+
+    ``next_page_token`` is None on the last page. ``total`` is an approximate
+    count of all matches; it is only fetched for the first page and is None if
+    unknown (later pages, or the count request failed).
+    """
+
+    issues: list[JiraIssue] = []
+    next_page_token: str | None = None
+    total: int | None = None
+
+
 class JiraApiError(Exception):
     """Raised when the Jira API returns an error response."""
 
@@ -161,48 +175,71 @@ class JiraClient:
         return self._parse_issue(data)
 
     async def search_issues(
-        self, jql: str, max_results: int = 20, start_at: int = 0
-    ) -> tuple[list[JiraIssue], int]:
-        """Search issues by JQL. Returns (issues, total_count)."""
-        data = await self._request(
-            "POST",
-            "search",
-            json={
-                "jql": jql,
-                "startAt": start_at,
-                "maxResults": max_results,
-                "fields": [
-                    "key",
-                    "id",
-                    "summary",
-                    "status",
-                    "assignee",
-                    "reporter",
-                    "priority",
-                    "issuetype",
-                    "created",
-                    "updated",
-                    "project",
-                ],
-            },
+        self, jql: str, max_results: int = 20, page_token: str | None = None
+    ) -> JiraSearchPage:
+        """Search issues by JQL using the enhanced search API.
+
+        Uses ``POST /rest/api/3/search/jql`` (the legacy ``/search`` endpoint is
+        removed). Pagination is token-based: pass the previous page's
+        ``next_page_token`` to continue. The JQL must be bounded (contain a
+        search restriction such as ``project = X``).
+        """
+        body: dict[str, Any] = {
+            "jql": jql,
+            "maxResults": max_results,
+            # Enhanced search returns only issue ids unless fields are requested.
+            "fields": [
+                "summary",
+                "status",
+                "assignee",
+                "reporter",
+                "priority",
+                "issuetype",
+                "created",
+                "updated",
+                "project",
+            ],
+        }
+        if page_token:
+            body["nextPageToken"] = page_token
+
+        search = self._request("POST", "search/jql", json=body)
+        if page_token:
+            data = await search
+            total: int | None = None
+        else:
+            # Enhanced search has no total; fetch an approximate count alongside page 1.
+            data, total = await asyncio.gather(search, self._approximate_count(jql))
+
+        next_token = None if data.get("isLast", True) else data.get("nextPageToken")
+        return JiraSearchPage(
+            issues=[self._parse_issue(i) for i in data.get("issues", [])],
+            next_page_token=next_token,
+            total=total,
         )
-        total: int = data.get("total", 0)
-        issues = [self._parse_issue(i) for i in data.get("issues", [])]
-        return issues, total
+
+    async def _approximate_count(self, jql: str) -> int | None:
+        """Best-effort approximate match count; None if the request fails."""
+        try:
+            data = await self._request("POST", "search/approximate-count", json={"jql": jql})
+        except JiraApiError:
+            return None
+        count = data.get("count")
+        return count if isinstance(count, int) else None
 
     async def get_my_work(
         self,
         status_filter: str | None = None,
         max_results: int = 20,
-        start_at: int = 0,
-    ) -> tuple[list[JiraIssue], int]:
+        page_token: str | None = None,
+    ) -> JiraSearchPage:
         """Return issues assigned to the current user, ordered by last updated."""
         jql = "assignee = currentUser()"
         if status_filter:
             safe_status = status_filter.replace("\\", "\\\\").replace("'", "\\'")
             jql += f" AND status = '{safe_status}'"
         jql += " ORDER BY updated DESC"
-        return await self.search_issues(jql, max_results=max_results, start_at=start_at)
+        return await self.search_issues(jql, max_results=max_results, page_token=page_token)
 
     async def get_issue_comments(
         self, issue_key: str, max_results: int = 20, start_at: int = 0

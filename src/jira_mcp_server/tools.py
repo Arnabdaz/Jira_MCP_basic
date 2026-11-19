@@ -13,6 +13,18 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 _BYTES_PER_KB = 1024
 
 
+def _showing_line(count: int, total: int | None) -> str:
+    """Summary line for a page of search results; total is approximate or unknown."""
+    noun = "issue" if count == 1 else "issues"
+    if total is None:
+        return f"Showing {count} {noun}"
+    return f"Showing {count} {noun} (about {total} total)"
+
+
+def _next_page_hint(token: str) -> str:
+    return f'*More results available. Call again with `page_token="{token}"` to get the next page.*'
+
+
 @mcp.tool(annotations=_READ_ONLY)
 async def read_jira_issue(issue_key: str) -> dict[str, Any]:
     """
@@ -79,40 +91,42 @@ async def read_jira_issue(issue_key: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=_READ_ONLY)
 async def search_jira_issues(
-    jql: str, max_results: int = 20, start_at: int = 0
+    jql: str, max_results: int = 20, page_token: str | None = None
 ) -> dict[str, Any]:
     """
     Search Jira issues using JQL (Jira Query Language).
+
+    The JQL must be bounded, i.e. include at least one search restriction
+    (a bare `ORDER BY created DESC` is rejected by Jira).
 
     Examples:
       - project = MYPROJ AND status = "In Progress"
       - assignee = currentUser() AND priority = High
       - text ~ "login error" AND created >= -7d
 
-    Results are paginated. The response includes total count and a hint to call
-    again with a higher start_at when more results are available.
+    Results are paginated with a token. When more results are available, the
+    response ends with the exact `page_token` value to pass on the next call.
 
     Args:
-        jql: Any valid JQL query string.
+        jql: A bounded JQL query string.
         max_results: Number of results per page (1-100, default 20).
-        start_at: Zero-based offset for pagination (default 0).
+        page_token: Token from the previous page to fetch the next one (omit for the first page).
     """
     try:
         validated_max = max(1, min(max_results, 100))
         client = get_jira_client()
-        issues, total = await client.search_issues(jql, validated_max, start_at)
+        page = await client.search_issues(jql, validated_max, page_token)
 
-        if not issues:
+        if not page.issues:
             return {"result": "No issues found matching the search criteria."}
 
-        end = start_at + len(issues)
         lines: list[str] = [
             "# Search Results",
             f"**JQL:** `{jql}`",
-            f"Showing {start_at + 1}-{end} of {total}",
+            _showing_line(len(page.issues), page.total),
             "",
         ]
-        for issue in issues:
+        for issue in page.issues:
             lines += [
                 f"## {issue.key}: {issue.summary}",
                 f"**Link:** {issue.url}",
@@ -121,10 +135,8 @@ async def search_jira_issues(
                 f"**Updated:** {issue.updated}",
                 "",
             ]
-        if end < total:
-            lines.append(
-                f"*More results available. Call again with `start_at={end}` to get the next page.*"
-            )
+        if page.next_page_token:
+            lines.append(_next_page_hint(page.next_page_token))
         return {"result": "\n".join(lines)}
     except Exception as e:
         return {"error": f"Error searching issues: {e!s}"}
@@ -132,35 +144,34 @@ async def search_jira_issues(
 
 @mcp.tool(annotations=_READ_ONLY)
 async def get_my_work(
-    status_filter: str | None = None, max_results: int = 20, start_at: int = 0
+    status_filter: str | None = None, max_results: int = 20, page_token: str | None = None
 ) -> dict[str, Any]:
     """
     Get Jira issues assigned to the currently authenticated user.
 
     Optionally filter by status (e.g., "In Progress", "Open", "To Do").
-    Results are ordered by most recently updated and support pagination.
+    Results are ordered by most recently updated and paginated with a token.
 
     Args:
         status_filter: Jira status name to filter by (optional).
         max_results: Number of results per page (1-100, default 20).
-        start_at: Zero-based offset for pagination (default 0).
+        page_token: Token from the previous page to fetch the next one (omit for the first page).
     """
     try:
         validated_max = max(1, min(max_results, 100))
         client = get_jira_client()
-        issues, total = await client.get_my_work(status_filter, validated_max, start_at)
+        page = await client.get_my_work(status_filter, validated_max, page_token)
 
-        if not issues:
+        if not page.issues:
             suffix = f" with status '{status_filter}'" if status_filter else ""
             return {"result": f"No assigned issues found{suffix}."}
 
-        end = start_at + len(issues)
-        lines: list[str] = ["# My Work", f"Showing {start_at + 1}-{end} of {total}"]
+        lines: list[str] = ["# My Work", _showing_line(len(page.issues), page.total)]
         if status_filter:
             lines.append(f"**Status Filter:** {status_filter}")
         lines.append("")
 
-        for issue in issues:
+        for issue in page.issues:
             lines += [
                 f"## {issue.key}: {issue.summary}",
                 f"**Link:** {issue.url}",
@@ -169,10 +180,8 @@ async def get_my_work(
                 "",
             ]
 
-        if end < total:
-            lines.append(
-                f"*More results available. Call again with `start_at={end}` to get the next page.*"
-            )
+        if page.next_page_token:
+            lines.append(_next_page_hint(page.next_page_token))
         return {"result": "\n".join(lines)}
     except Exception as e:
         return {"error": f"Error getting work: {e!s}"}
