@@ -81,7 +81,7 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
                 lines.append(_process_node(child, depth))
         inner = "".join(lines).strip()
         indent = "  " * depth
-        return f"{indent}- {inner}\n"
+        return f"{indent}-{_item_sep(inner)}{inner}\n"
 
     if node_type == "codeBlock":
         lang: str = node.get("attrs", {}).get("language", "")
@@ -159,6 +159,11 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
     return ""
 
 
+def _item_sep(inner: str) -> str:
+    """Put an item that starts with a code fence on its own line, so the fence stays a fence."""
+    return "\n" if inner.startswith(("```", "~~~")) else " "
+
+
 def _format_date(timestamp: Any) -> str:
     """ADF date nodes carry a UTC epoch-milliseconds string; render as YYYY-MM-DD."""
     try:
@@ -178,7 +183,7 @@ def _process_ordered_list(items: list[dict[str, Any]], depth: int = 0) -> str:
             else:
                 lines.append(_process_node(child, depth))
         inner = "".join(lines).strip()
-        parts.append(f"{indent}{i}. {inner}\n")
+        parts.append(f"{indent}{i}.{_item_sep(inner)}{inner}\n")
     return "".join(parts) + "\n"
 
 

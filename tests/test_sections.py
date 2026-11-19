@@ -219,3 +219,94 @@ class TestPathologicalInput:
     def test_closing_hashes_are_stripped_from_title(self) -> None:
         _, sections = parse_sections("## Setup ##\n\nx\n\n## C# tips\n\ny\n")
         assert [s.title for s in sections] == ["Setup", "C# tips"]
+
+
+def _code(text: str, lang: str = "bash") -> dict[str, object]:
+    return {
+        "type": "codeBlock",
+        "attrs": {"language": lang},
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def _p(text: str) -> dict[str, object]:
+    return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+
+
+def _h(level: int, text: str) -> dict[str, object]:
+    return {
+        "type": "heading",
+        "attrs": {"level": level},
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+class TestRealConverterOutput:
+    """Regression: code blocks that start a list item/cell broke fence tracking."""
+
+    def _parse_adf(self, *blocks: dict[str, object]) -> list[str]:
+        from jira_mcp_server.adf import extract_text
+
+        md = extract_text({"type": "doc", "version": 1, "content": list(blocks)}) or ""
+        return [s.title for s in parse_sections(md)[1]]
+
+    def test_code_block_first_in_ordered_list_item(self) -> None:
+        steps = {
+            "type": "orderedList",
+            "content": [
+                {"type": "listItem", "content": [_p("install")]},
+                {"type": "listItem", "content": [_code("# step two\nrun")]},
+            ],
+        }
+        titles = self._parse_adf(_h(2, "Setup"), steps, _h(2, "Usage"), _h(2, "Troubleshooting"))
+        assert titles == ["Setup", "Usage", "Troubleshooting"]
+
+    def test_code_block_first_in_bullet_list_item(self) -> None:
+        bullets = {
+            "type": "bulletList",
+            "content": [{"type": "listItem", "content": [_code("# c1\nx")]}],
+        }
+        assert self._parse_adf(_h(1, "A"), bullets, _h(1, "B")) == ["A", "B"]
+
+    def test_code_block_in_table_cell(self) -> None:
+        table = {
+            "type": "table",
+            "content": [
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableHeader", "content": [_p("cmd")]},
+                        {"type": "tableHeader", "content": [_p("note")]},
+                    ],
+                },
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableCell", "content": [_code("# c1\nx")]},
+                        {"type": "tableCell", "content": [_p("y")]},
+                    ],
+                },
+            ],
+        }
+        assert self._parse_adf(_h(1, "A"), table, _h(1, "B")) == ["A", "B"]
+
+    def test_tilde_fence_inside_backtick_fence(self) -> None:
+        md = "# A\n\n```markdown\n~~~\n# not heading\n~~~\n```\n\n# B\n\nx\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B"]
+
+    def test_longer_fence_closes_only_with_same_length(self) -> None:
+        md = "# A\n\n````\n```\n# not heading\n```\n````\n\n# B\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B"]
+
+
+class TestManyHeadings:
+    def test_parse_is_linear_in_heading_count(self) -> None:
+        """Regression: computing section ends sliced the heading list per heading."""
+        import time
+
+        md = "".join(f"# H{i}\n" for i in range(100_000))
+        started = time.perf_counter()
+        _, sections = parse_sections(md)
+        assert time.perf_counter() - started < 2.0
+        assert len(sections) == 100_000
+        assert sections[0].end == sections[1].start

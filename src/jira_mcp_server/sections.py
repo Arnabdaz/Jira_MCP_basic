@@ -14,7 +14,10 @@ from dataclasses import dataclass
 # Linear-time on purpose: an overlapping form like `(.+?)[ \t#]*$` backtracks
 # quadratically on long lines of spaces/hashes. Closing hashes are stripped in Python.
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$")
-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# A fence may follow list markers, quote markers or a table-cell pipe, because the ADF
+# converter can place a code block right after "- ", "2. " or "| ". Linear: every
+# repeated prefix must end in a fixed marker character.
+_FENCE_RE = re.compile(r"^[ \t]*(?:(?:[-*+>|]|\d+\.)[ \t]*)*(`{3,}|~{3,})")
 _MAX_DEPTH = 3  # number only the first three heading levels present
 _SNIPPET_RADIUS = 200
 _PHRASE_BONUS = 500
@@ -60,13 +63,18 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
         return "", []
 
     raw: list[tuple[int, str, int, int]] = []  # (level, title, start, body_start)
-    in_fence = False
+    fence: str | None = None  # the open fence marker, e.g. "```" or "~~~~"
     pos = 0
     for line in md.splitlines(keepends=True):
         text = line.rstrip("\r\n")
-        if _FENCE_RE.match(text):
-            in_fence = not in_fence
-        elif not in_fence:
+        fence_match = _FENCE_RE.match(text)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = None  # only a same-character fence at least as long closes it
+        elif fence is None:
             match = _HEADING_RE.match(text)
             if match:
                 title = _strip_closing_hashes(match.group(2))
@@ -78,13 +86,23 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
     if not heads:
         return md.strip(), []
 
+    # Section ends in one reverse pass (linear): next_at_or_above[d] is the start of
+    # the nearest following heading whose depth is <= d.
+    ends = [len(md)] * len(heads)
+    next_at_or_above = [len(md)] * (_MAX_DEPTH + 1)
+    for i in range(len(heads) - 1, -1, -1):
+        depth, start = heads[i][0], heads[i][2]
+        ends[i] = next_at_or_above[depth]
+        for d in range(depth, _MAX_DEPTH + 1):
+            next_at_or_above[d] = start
+
     sections: list[Section] = []
     counters = [0] * _MAX_DEPTH
     for i, (depth, title, start, body_start) in enumerate(heads):
         counters[depth - 1] += 1
         for k in range(depth, _MAX_DEPTH):
             counters[k] = 0
-        end = next((h[2] for h in heads[i + 1 :] if h[0] <= depth), len(md))
+        end = ends[i]
         own_end = heads[i + 1][2] if i + 1 < len(heads) else len(md)
         sections.append(
             Section(

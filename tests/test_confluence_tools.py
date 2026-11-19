@@ -330,3 +330,34 @@ class TestRegistration:
             assert name in tools, name
             assert tools[name].annotations is not None
             assert tools[name].annotations.readOnlyHint is True
+
+
+class TestReviewFixes:
+    async def test_long_intro_is_reachable_with_parts(self) -> None:
+        intro = "\n\n".join(f"MARK{i:03d} " + "i" * 200 for i in range(120))
+        body = intro + "\n\n# Appendix\n\nsmall\n"
+        first = await _read(_page(body=body), max_chars=15000)
+        assert "## Outline" in first
+        assert "part=2" in first
+        later = [await _read(_page(body=body), max_chars=15000, part=n) for n in (2, 3)]
+        joined = "".join(later)
+        assert "MARK000" in joined
+        assert "MARK119" in joined
+        assert "Intro part 1 of 2" in later[0]
+
+    async def test_long_section_lead_is_reachable_with_parts(self) -> None:
+        lead = "\n\n".join(f"LEAD{i:03d} " + "l" * 200 for i in range(100))
+        body = "# One\n\n" + lead + "\n\n## Child\n\nsmall\n\n# Two\n\nx\n"
+        first = await _read(_page(body=body), section="1", max_chars=15000)
+        assert "## Outline" in first
+        assert 'section="1", part=2' in first
+        second = await _read(_page(body=body), section="1", max_chars=15000, part=2)
+        assert "LEAD000" in second
+
+    async def test_ambiguous_listing_is_capped(self) -> None:
+        body = "".join(f"# Topic {i}\n\n" + "t" * 50 + "\n\n" for i in range(300))
+        text = await _read(_page(body=body), section="topic", max_chars=1000)
+        assert "Several sections match" in text
+        assert "Topic 19" in text
+        assert "Topic 25" not in text
+        assert "280 more" in text

@@ -21,6 +21,7 @@ from .sections import (
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 _DEFAULT_MAX_CHARS = 15_000  # ~4k tokens: keeps a single page read a modest share of context
 _INTRO_CHARS = 2_000
+_MAX_MATCHES = 20  # cap ambiguous-section listings so they can't flood the context
 _NAV_HINT = (
     '*Read one section with `section="<number>"` (e.g. the number from the outline), '
     'or search this page with `find="keywords"`.*'
@@ -162,7 +163,9 @@ def _page_content(md: str, section: str | None, find: str | None, part: int, bud
             outline = render_outline(sections) or "(this page has no headings)"
             return f'No section matches "{section.strip()}". Outline:\n\n{outline}'
         if len(matches) > 1:
-            listing = "\n".join(f"- {s.number} {s.title}" for s in matches)
+            listing = "\n".join(f"- {s.number} {s.title}" for s in matches[:_MAX_MATCHES])
+            if len(matches) > _MAX_MATCHES:
+                listing += f"\n- … {len(matches) - _MAX_MATCHES} more (use a more specific title)"
             return (
                 f'Several sections match "{section.strip()}":\n\n{listing}\n\n'
                 "*Call again with the section number, e.g. "
@@ -206,6 +209,22 @@ def _render_scope(
 
     nav = f'section="{section_arg}", ' if section_arg else ""
     if children:
+        # part=1 is the outline; part=2.. page through the intro/lead text, which
+        # belongs to no subsection and would otherwise be unreachable.
+        lead_parts = split_parts(lead, budget) if lead else []
+        if part > 1:
+            index = part - 2
+            if index >= len(lead_parts):
+                return (
+                    f"Part {part} does not exist: the intro has {len(lead_parts)} "
+                    f"part(s), read with `{nav}part=2`"
+                    + (f" to `part={len(lead_parts) + 1}`." if len(lead_parts) > 1 else ".")
+                )
+            footer = f"*Intro part {index + 1} of {len(lead_parts)}.*"
+            if index + 1 < len(lead_parts):
+                footer += f" *Call again with `{nav}part={part + 1}` to continue.*"
+            return "\n".join([prefix + lead_parts[index], "", "---", footer, _NAV_HINT])
+
         out = [
             f"**{label} is long ({len(text):,} characters, {len(children)} sections). "
             "Showing the outline instead of the full text.**",
@@ -216,7 +235,13 @@ def _render_scope(
         ]
         if lead:
             shown = lead[:_INTRO_CHARS]
-            out += ["", "## Intro", "", shown + (" …" if len(lead) > len(shown) else "")]
+            out += ["", "## Intro", "", shown]
+            if len(lead) > len(shown):
+                out += [
+                    "",
+                    f"*[Intro continues: {len(lead):,} characters in total. "
+                    f"Read it in full with `{nav}part=2`.]*",
+                ]
         out += ["", "---", _NAV_HINT, _SUBAGENT_TIP]
         return "\n".join(out)
 
