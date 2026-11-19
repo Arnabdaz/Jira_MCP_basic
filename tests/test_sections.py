@@ -203,3 +203,19 @@ class TestSplitParts:
     def test_oversized_paragraph_is_hard_cut(self) -> None:
         parts = split_parts("y" * 250, 100)
         assert [len(p) for p in parts] == [100, 100, 50]
+
+
+class TestPathologicalInput:
+    def test_long_heading_line_parses_quickly(self) -> None:
+        """Regression: an overlapping heading regex backtracked quadratically."""
+        import time
+
+        line = "# " + " #" * 50_000 + "x"
+        started = time.perf_counter()
+        _, sections = parse_sections(line + "\n\nbody\n")
+        assert time.perf_counter() - started < 0.5
+        assert len(sections) == 1
+
+    def test_closing_hashes_are_stripped_from_title(self) -> None:
+        _, sections = parse_sections("## Setup ##\n\nx\n\n## C# tips\n\ny\n")
+        assert [s.title for s in sections] == ["Setup", "C# tips"]

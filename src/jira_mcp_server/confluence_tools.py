@@ -7,10 +7,28 @@ from typing import Any
 from mcp.types import ToolAnnotations
 
 from .app import mcp
-from .confluence import get_confluence_client
+from .confluence import ConfluencePage, get_confluence_client
+from .sections import (
+    Section,
+    children_of,
+    find_sections,
+    parse_sections,
+    render_outline,
+    search_sections,
+    split_parts,
+)
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
-_DEFAULT_MAX_CHARS = 40_000
+_DEFAULT_MAX_CHARS = 15_000  # ~4k tokens: keeps a single page read a modest share of context
+_INTRO_CHARS = 2_000
+_NAV_HINT = (
+    '*Read one section with `section="<number>"` (e.g. the number from the outline), '
+    'or search this page with `find="keywords"`.*'
+)
+_SUBAGENT_TIP = (
+    "*Tip: if you can delegate to a sub-agent, have it read the relevant sections "
+    "and report back only what you need.*"
+)
 
 
 def _space_label(name: str | None, key: str | None) -> str | None:
@@ -82,9 +100,24 @@ async def search_confluence(
 
 
 @mcp.tool(annotations=_READ_ONLY)
-async def read_confluence_page(page: str, max_chars: int = _DEFAULT_MAX_CHARS) -> dict[str, Any]:
+async def read_confluence_page(
+    page: str,
+    section: str | None = None,
+    find: str | None = None,
+    part: int = 1,
+    max_chars: int = _DEFAULT_MAX_CHARS,
+) -> dict[str, Any]:
     """
-    Read a Confluence page's full content as markdown.
+    Read a Confluence page as markdown, without flooding your context on long pages.
+
+    Pages up to `max_chars` (default 15000) are returned whole. Longer pages
+    return a numbered outline (section sizes) plus the intro; then:
+      - `section="2.1"` (or a heading title) reads just that section,
+      - `find="keywords"` lists the best-matching sections with snippets,
+      - `part=2`, `3`, ... pages through text that has no headings to split on.
+
+    For long docs, if you can delegate to a sub-agent, have it navigate the page
+    with these options and return only the facts you need.
 
     Accepts a numeric page id or a full page URL, such as
     https://<site>.atlassian.net/wiki/spaces/ENG/pages/12345/Page+Title
@@ -92,37 +125,127 @@ async def read_confluence_page(page: str, max_chars: int = _DEFAULT_MAX_CHARS) -
 
     Args:
         page: Page id or full Confluence page URL.
-        max_chars: Truncate the body after this many characters (default 40000).
+        section: Section number from the outline (e.g. "2.1") or a heading title.
+        find: Keywords to search for within the page.
+        part: Which part to read when text is split into parts (default 1).
+        max_chars: Size budget for the returned content (default 15000).
     """
     try:
         client = get_confluence_client()
         doc = await client.get_page(page)
-
-        lines: list[str] = [f"# {doc.title}", f"**Link:** {doc.url}"]
-        meta = [f"**Page id:** {doc.id}"]
-        space = _space_label(doc.space_name, doc.space_key)
-        if space:
-            meta.append(f"**Space:** {space}")
-        if doc.version is not None:
-            meta.append(f"**Version:** {doc.version}")
-        if doc.last_updated:
-            meta.append(f"**Updated:** {doc.last_updated}")
-        lines += ["  |  ".join(meta), "", "---", ""]
-
-        body = doc.body
-        limit = max(1, max_chars)
-        if len(body) > limit:
-            lines.append(body[:limit])
-            lines += [
-                "",
-                f"*[Content truncated: showing {limit} of {len(body)} characters. "
-                "Call again with a larger `max_chars` to read more.]*",
-            ]
-        else:
-            lines.append(body or "*[empty page]*")
+        lines = _page_header(doc)
+        lines.append(_page_content(doc.body, section, find, part, max(1, max_chars)))
         return {"result": "\n".join(lines)}
     except Exception as e:
         return {"error": f"Error reading Confluence page: {e!s}"}
+
+
+def _page_header(doc: ConfluencePage) -> list[str]:
+    meta = [f"**Page id:** {doc.id}"]
+    space = _space_label(doc.space_name, doc.space_key)
+    if space:
+        meta.append(f"**Space:** {space}")
+    if doc.version is not None:
+        meta.append(f"**Version:** {doc.version}")
+    if doc.last_updated:
+        meta.append(f"**Updated:** {doc.last_updated}")
+    return [f"# {doc.title}", f"**Link:** {doc.url}", "  |  ".join(meta), "", "---", ""]
+
+
+def _page_content(md: str, section: str | None, find: str | None, part: int, budget: int) -> str:
+    intro, sections = parse_sections(md)
+    if find and find.strip():
+        return _render_find(md, intro, sections, find.strip())
+    if section and section.strip():
+        matches = find_sections(sections, section)
+        if not matches:
+            outline = render_outline(sections) or "(this page has no headings)"
+            return f'No section matches "{section.strip()}". Outline:\n\n{outline}'
+        if len(matches) > 1:
+            listing = "\n".join(f"- {s.number} {s.title}" for s in matches)
+            return (
+                f'Several sections match "{section.strip()}":\n\n{listing}\n\n'
+                "*Call again with the section number, e.g. "
+                f'`section="{matches[0].number}"`.*'
+            )
+        s = matches[0]
+        return _render_scope(
+            text=md[s.start : s.end],
+            label=f"Section {s.number}: {s.title}",
+            children=children_of(sections, s),
+            lead=md[s.body_start : s.own_end].strip(),
+            section_arg=s.number,
+            part=part,
+            budget=budget,
+        )
+    return _render_scope(
+        text=md,
+        label="Page",
+        children=sections,
+        lead=intro,
+        section_arg=None,
+        part=part,
+        budget=budget,
+    )
+
+
+def _render_scope(
+    *,
+    text: str,
+    label: str,
+    children: list[Section],
+    lead: str,
+    section_arg: str | None,
+    part: int,
+    budget: int,
+) -> str:
+    """Whole text if it fits; else an outline of its subsections; else numbered parts."""
+    prefix = f"**{label}**\n\n" if section_arg else ""
+    if len(text) <= budget and part == 1:
+        return prefix + (text or "*[empty page]*")
+
+    nav = f'section="{section_arg}", ' if section_arg else ""
+    if children:
+        out = [
+            f"**{label} is long ({len(text):,} characters, {len(children)} sections). "
+            "Showing the outline instead of the full text.**",
+            "",
+            "## Outline",
+            "",
+            render_outline(children),
+        ]
+        if lead:
+            shown = lead[:_INTRO_CHARS]
+            out += ["", "## Intro", "", shown + (" …" if len(lead) > len(shown) else "")]
+        out += ["", "---", _NAV_HINT, _SUBAGENT_TIP]
+        return "\n".join(out)
+
+    parts = split_parts(text, budget)
+    if not 1 <= part <= len(parts):
+        return f"Part {part} does not exist: this {label.lower()} has {len(parts)} parts."
+    out = [prefix + parts[part - 1], "", "---"]
+    footer = f"*Part {part} of {len(parts)} ({len(text):,} characters in total).*"
+    if part < len(parts):
+        footer += f" *Call again with `{nav}part={part + 1}` to continue.*"
+    out += [footer, _SUBAGENT_TIP]
+    return "\n".join(out)
+
+
+def _render_find(md: str, intro: str, sections: list[Section], query: str) -> str:
+    hits = search_sections(md, intro, sections, query)
+    if not hits:
+        outline = render_outline(sections)
+        return f'No matches for "{query}" in this page.' + (
+            f"\n\nOutline:\n\n{outline}" if outline else ""
+        )
+    out = [f'## Matches for "{query}"', ""]
+    for hit in hits:
+        heading = f"{hit.section.number} {hit.section.title}" if hit.section else "Intro"
+        out += [f"### {heading}", f"> {hit.snippet}", ""]
+    first = next((h.section for h in hits if h.section), None)
+    if first:
+        out.append(f'*Read a match in full with `section="{first.number}"`.*')
+    return "\n".join(out)
 
 
 @mcp.tool(annotations=_READ_ONLY)

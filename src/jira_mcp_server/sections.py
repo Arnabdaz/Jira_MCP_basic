@@ -11,7 +11,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$")
+# Linear-time on purpose: an overlapping form like `(.+?)[ \t#]*$` backtracks
+# quadratically on long lines of spaces/hashes. Closing hashes are stripped in Python.
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _MAX_DEPTH = 3  # number only the first three heading levels present
 _SNIPPET_RADIUS = 200
@@ -43,6 +45,15 @@ class SearchHit:
     score: int
 
 
+def _strip_closing_hashes(title: str) -> str:
+    """Drop an optional closing `##` sequence ("Setup ##" -> "Setup"; keeps "C# tips")."""
+    text = title.strip()
+    without = text.rstrip("#")
+    if without != text and (not without or without[-1] in " \t"):
+        return without.strip()
+    return text
+
+
 def parse_sections(md: str) -> tuple[str, list[Section]]:
     """Split markdown into (intro, sections in document order). Code fences are skipped."""
     if not md:
@@ -58,7 +69,8 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
         elif not in_fence:
             match = _HEADING_RE.match(text)
             if match:
-                raw.append((len(match.group(1)), match.group(2).strip(), pos, pos + len(line)))
+                title = _strip_closing_hashes(match.group(2))
+                raw.append((len(match.group(1)), title, pos, pos + len(line)))
         pos += len(line)
 
     depth_of = {lvl: i + 1 for i, lvl in enumerate(sorted({r[0] for r in raw})[:_MAX_DEPTH])}

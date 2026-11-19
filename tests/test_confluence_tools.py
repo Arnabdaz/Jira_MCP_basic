@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jira_mcp_server.confluence import (
@@ -40,6 +41,26 @@ def _page(body: str = "# Intro\n\nHello") -> ConfluencePage:
         version=7,
         last_updated="2026-10-02T09:00:00.000Z",
     )
+
+
+LONG_DOC = (
+    "Intro about Knox.\n\n"
+    "# Architecture\n\n" + "a" * 3000 + "\n\n"
+    "# Configuration\n\nSet up Knox first.\n\n"
+    "## Token exchange\n\nConfigure the token exchange endpoint.\n\n" + "b" * 1500 + "\n\n"
+    "## Audience\n\n" + "c" * 1500 + "\n"
+)
+
+
+async def _read(doc: ConfluencePage, **kwargs: Any) -> str:
+    from jira_mcp_server.confluence_tools import read_confluence_page
+
+    client = MagicMock()
+    client.get_page = AsyncMock(return_value=doc)
+    with patch(PATCH, return_value=client):
+        out = await read_confluence_page("123", **kwargs)
+    assert "result" in out, out
+    return str(out["result"])
 
 
 class TestSearchConfluence:
@@ -105,18 +126,88 @@ class TestReadConfluencePage:
         assert "Hello" in text
         client.get_page.assert_awaited_once_with("123")
 
-    async def test_truncates_long_body(self) -> None:
-        from jira_mcp_server.confluence_tools import read_confluence_page
-
-        client = MagicMock()
-        client.get_page = AsyncMock(return_value=_page(body="x" * 5000))
-        with patch(PATCH, return_value=client):
-            out = await read_confluence_page("123", max_chars=1000)
-        text = out["result"]
+    async def test_no_headings_falls_back_to_parts(self) -> None:
+        text = await _read(_page(body="x" * 5000), max_chars=1000)
         assert "x" * 1000 in text
         assert "x" * 1001 not in text
-        assert "truncated" in text
-        assert "5000" in text
+        assert "Part 1 of 5" in text
+        assert "part=2" in text
+
+    async def test_next_part(self) -> None:
+        body = "\n\n".join(f"para{i} " + "p" * 400 for i in range(5))
+        text = await _read(_page(body=body), max_chars=1000, part=2)
+        assert "Part 2 of" in text
+        assert "para0" not in text
+
+    async def test_part_out_of_range(self) -> None:
+        text = await _read(_page(body="x" * 3000), max_chars=1000, part=99)
+        assert "has 3 parts" in text
+
+    async def test_default_limit_is_15000(self) -> None:
+        fits = await _read(_page(body="y" * 15000))
+        assert "y" * 15000 in fits
+        too_big = await _read(_page(body="y" * 15001))
+        assert "Part 1 of 2" in too_big
+
+    async def test_long_page_returns_outline_and_intro_not_body(self) -> None:
+        text = await _read(_page(body=LONG_DOC), max_chars=1000)
+        assert "## Outline" in text
+        assert "1 Architecture" in text
+        assert "  2.1 Token exchange" in text
+        assert "Intro about Knox." in text
+        assert "a" * 100 not in text
+        assert 'section="' in text
+        assert 'find="' in text
+        assert "sub-agent" in text
+
+    async def test_section_by_number_returns_only_that_section(self) -> None:
+        text = await _read(_page(body=LONG_DOC), section="2.1", max_chars=5000)
+        assert "## Token exchange" in text
+        assert "Configure the token exchange endpoint." in text
+        assert "a" * 100 not in text
+        assert "Section 2.1" in text
+
+    async def test_section_by_title(self) -> None:
+        text = await _read(_page(body=LONG_DOC), section="architecture", max_chars=5000)
+        assert "a" * 3000 in text
+
+    async def test_section_too_big_with_children_shows_sub_outline(self) -> None:
+        text = await _read(_page(body=LONG_DOC), section="2", max_chars=1000)
+        assert "## Outline" in text
+        assert "2.1 Token exchange" in text
+        assert "1 Architecture" not in text
+        assert "Set up Knox first." in text  # the section's own lead text
+
+    async def test_huge_leaf_section_is_split_into_parts(self) -> None:
+        text = await _read(_page(body=LONG_DOC), section="1", max_chars=1000)
+        assert "Part 1 of" in text
+        assert 'section="1", part=2' in text
+
+    async def test_ambiguous_section_lists_matches(self) -> None:
+        body = "# Overview\n\n" + "a" * 2000 + "\n\n# API\n\n## Overview\n\nb\n"
+        text = await _read(_page(body=body), section="Overview", max_chars=1000)
+        assert "Several sections match" in text
+        assert "1 Overview" in text
+        assert "2.1 Overview" in text
+
+    async def test_unknown_section_shows_outline(self) -> None:
+        text = await _read(_page(body=LONG_DOC), section="billing", max_chars=1000)
+        assert 'No section matches "billing"' in text
+        assert "1 Architecture" in text
+
+    async def test_find_returns_numbered_matches(self) -> None:
+        text = await _read(_page(body=LONG_DOC), find="token exchange", max_chars=1000)
+        assert '## Matches for "token exchange"' in text
+        assert "2.1 Token exchange" in text
+        assert 'section="2.1"' in text
+
+    async def test_find_no_matches(self) -> None:
+        text = await _read(_page(body=LONG_DOC), find="kubernetes", max_chars=1000)
+        assert 'No matches for "kubernetes"' in text
+
+    async def test_find_on_short_page_still_searches(self) -> None:
+        text = await _read(_page(body="# A\n\nsmall knox page\n"), find="knox")
+        assert '## Matches for "knox"' in text
 
     async def test_empty_page_body(self) -> None:
         from jira_mcp_server.confluence_tools import read_confluence_page

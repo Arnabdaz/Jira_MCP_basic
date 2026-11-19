@@ -167,15 +167,31 @@ expression. Results include page ids, space, last-modified time and a highlighte
 
 ### `read_confluence_page`
 
-Full page content as markdown (headings, lists, tables, code, links, panels,
-status labels, task lists; body-less macros appear as `[macro: name]`). Accepts a
-page id or full page URL. Long pages are truncated at `max_chars` (default 40000).
+Page content as markdown (headings, lists, tables, code, links, panels, status
+labels, task lists; body-less macros appear as `[macro: name]`). Accepts a page id
+or full page URL.
+
+**Long pages don't flood the context.** Pages up to `max_chars` (default 15000,
+about 4k tokens) are returned whole. Longer pages return a numbered **outline**
+with section sizes plus the intro, and the agent then reads only what it needs:
+
+| Argument | Returns |
+|----------|---------|
+| `section="2.1"` or `section="Troubleshooting"` | Just that section (with its subsections). If it is still too long, its own outline. Ambiguous titles list the matches. |
+| `find="token exchange"` | The 5 best-matching sections, each with its number and a snippet. |
+| `part=2` | The next part, for text without headings (or a single huge section). |
+
+The outline numbers the first three heading levels; `#` lines inside code blocks
+are ignored. Agents that support sub-agents are told to delegate long-doc reading
+to one, so only the needed facts reach the main conversation.
 
 ```json
 {
   "tool": "read_confluence_page",
   "arguments": { "page": "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Setup+Guide" }
 }
+{ "tool": "read_confluence_page", "arguments": { "page": "12345", "section": "3.2" } }
+{ "tool": "read_confluence_page", "arguments": { "page": "12345", "find": "audience claim" } }
 ```
 
 ### `get_confluence_page_children`
@@ -262,12 +278,14 @@ jira-mcp/
 │       ├── confluence_tools.py  # Confluence MCP tool definitions
 │       ├── client.py            # JiraClient + data models (shared HTTP session)
 │       ├── confluence.py        # ConfluenceClient (reuses JiraClient session/auth)
+│       ├── sections.py          # Outline/section/search navigation for long pages
 │       └── adf.py               # ADF → markdown converter (Jira + Confluence)
 └── tests/
     ├── test_adf.py
     ├── test_client.py
     ├── test_confluence.py
     ├── test_confluence_tools.py
+    ├── test_sections.py
     └── test_tools.py
 ```
 
