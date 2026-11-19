@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -187,13 +188,22 @@ def _process_ordered_list(items: list[dict[str, Any]], depth: int = 0) -> str:
     return "".join(parts) + "\n"
 
 
+def _table_cell_text(text: str) -> str:
+    """Keep a markdown table row on one line: escape pipes, newlines become <br>.
+
+    Multi-line cells (paragraphs, code, headings) would otherwise break the row and
+    leak lines like "## Heading" out of the table.
+    """
+    return re.sub(r"\n+", "<br>", text.strip().replace("|", "\\|"))
+
+
 def _process_table(rows: list[dict[str, Any]]) -> str:
     table_rows: list[list[str]] = []
     for row in rows:
         if row.get("type") != "tableRow":
             continue
         cells = [
-            _process_nodes(cell.get("content", [])).strip()
+            _table_cell_text(_process_nodes(cell.get("content", [])))
             for cell in row.get("content", [])
             if cell.get("type") in ("tableCell", "tableHeader")
         ]

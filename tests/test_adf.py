@@ -627,3 +627,39 @@ def test_nested_expand_like_expand() -> None:
     result = extract_text(adf) or ""
     assert "**Details**" in result
     assert "hidden" in result
+
+
+def test_table_cell_newlines_are_flattened_so_rows_stay_on_one_line() -> None:
+    adf = _doc(
+        {
+            "type": "table",
+            "content": [
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableHeader", "content": [_para({"type": "text", "text": "h"})]},
+                    ],
+                },
+                {
+                    "type": "tableRow",
+                    "content": [
+                        {
+                            "type": "tableCell",
+                            "content": [
+                                _para({"type": "text", "text": "first"}),
+                                {
+                                    "type": "heading",
+                                    "attrs": {"level": 2},
+                                    "content": [{"type": "text", "text": "InCell"}],
+                                },
+                                _para({"type": "text", "text": "a|b"}),
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+    )
+    result = extract_text(adf) or ""
+    assert "| first<br>## InCell<br>a\\|b |" in result
+    assert not any(line.startswith("#") for line in result.splitlines())

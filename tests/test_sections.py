@@ -2,14 +2,39 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from jira_mcp_server.sections import (
     children_of,
     find_sections,
     parse_sections,
     render_outline,
     search_sections,
+    search_terms,
     split_parts,
 )
+
+
+def _assert_linear(run: Callable[[int], None], n: int) -> None:
+    """Fail if doubling the input more than ~triples the time (quadratic work ~4x).
+
+    A ratio is robust to a uniformly slow or loaded machine, unlike a fixed time
+    limit. Runs that are absolutely fast (< 50ms at 2n) pass outright, because
+    timer noise dominates tiny durations; quadratic work is far slower at 2n.
+    """
+
+    def best(size: int) -> float:
+        times = []
+        for _ in range(3):
+            started = time.perf_counter()
+            run(size)
+            times.append(time.perf_counter() - started)
+        return min(times)
+
+    small, large = best(n), best(2 * n)
+    assert large < 0.05 or large / max(small, 1e-9) < 3.0, (small, large)
+
 
 DOC = """Intro paragraph about Knox.
 
@@ -206,14 +231,14 @@ class TestSplitParts:
 
 
 class TestPathologicalInput:
-    def test_long_heading_line_parses_quickly(self) -> None:
+    def test_long_heading_line_parses_in_linear_time(self) -> None:
         """Regression: an overlapping heading regex backtracked quadratically."""
-        import time
 
-        line = "# " + " #" * 50_000 + "x"
-        started = time.perf_counter()
-        _, sections = parse_sections(line + "\n\nbody\n")
-        assert time.perf_counter() - started < 0.5
+        def run(n: int) -> None:
+            parse_sections("# " + " #" * n + "x\n\nbody\n")
+
+        _assert_linear(run, 20_000)
+        _, sections = parse_sections("# " + " #" * 50_000 + "x\n")
         assert len(sections) == 1
 
     def test_closing_hashes_are_stripped_from_title(self) -> None:
@@ -302,11 +327,78 @@ class TestRealConverterOutput:
 class TestManyHeadings:
     def test_parse_is_linear_in_heading_count(self) -> None:
         """Regression: computing section ends sliced the heading list per heading."""
-        import time
 
-        md = "".join(f"# H{i}\n" for i in range(100_000))
-        started = time.perf_counter()
-        _, sections = parse_sections(md)
-        assert time.perf_counter() - started < 2.0
-        assert len(sections) == 100_000
+        def run(n: int) -> None:
+            parse_sections("".join(f"# H{i}\n" for i in range(n)))
+
+        _assert_linear(run, 20_000)
+        _, sections = parse_sections("".join(f"# H{i}\n" for i in range(1000)))
+        assert len(sections) == 1000
         assert sections[0].end == sections[1].start
+
+
+class TestNumberingEdgeCases:
+    def test_skipped_level_numbers_under_parent(self) -> None:
+        _, sections = parse_sections("# A\n\n### A1\n\n# B\n\n## B1\n")
+        assert [(s.number, s.title) for s in sections] == [
+            ("1", "A"),
+            ("1.1", "A1"),
+            ("2", "B"),
+            ("2.1", "B1"),
+        ]
+
+    def test_heading_before_first_top_level_gets_no_zero(self) -> None:
+        _, sections = parse_sections("## Pre\n\n# A\n\n## A1\n")
+        assert [(s.number, s.title) for s in sections] == [("1", "Pre"), ("2", "A"), ("2.1", "A1")]
+
+    def test_lone_title_heading_is_not_numbered(self) -> None:
+        intro, sections = parse_sections("# Guide\n\nlead\n\n## Intro\n\nx\n\n## Setup\n\ny\n")
+        assert [(s.number, s.title) for s in sections] == [("1", "Intro"), ("2", "Setup")]
+        assert "# Guide" in intro
+        assert "lead" in intro
+
+    def test_single_heading_page_keeps_its_heading(self) -> None:
+        _, sections = parse_sections("# Only\n\ntext\n")
+        assert [s.title for s in sections] == ["Only"]
+
+    def test_lone_top_heading_later_in_doc_is_kept(self) -> None:
+        _, sections = parse_sections("## A\n\nx\n\n## B\n\ny\n\n# Appendix\n\nz\n")
+        assert [s.title for s in sections] == ["A", "B", "Appendix"]
+
+    def test_unicode_line_separators_do_not_split_lines(self) -> None:
+        _, sections = parse_sections("# A\u2028# B\n\nx\n")
+        assert len(sections) == 1
+
+
+class TestOutlineBudget:
+    def test_outline_respects_max_chars(self) -> None:
+        md = "".join(f"# Section number {i}\n\nx\n\n" for i in range(60))
+        _, sections = parse_sections(md)
+        outline = render_outline(sections, max_chars=300)
+        body, _, note = outline.partition("\n(")
+        assert len(body) <= 300
+        assert "more sections" in note
+
+    def test_collapses_to_one_level_before_truncating(self) -> None:
+        md = "".join(
+            f"# S{i}\n\n" + "".join(f"## T{i}-{j}\n\nx\n\n" for j in range(3)) for i in range(30)
+        )
+        _, sections = parse_sections(md)
+        assert len(sections) == 120
+        outline = render_outline(sections, max_entries=80)
+        assert "T0-0" not in outline
+        assert "S29" in outline
+        assert "90 deeper sections not shown" in outline
+
+
+class TestSearchScopeAndTerms:
+    def test_search_terms_drop_short_words(self) -> None:
+        assert search_terms("a ! token X exchange") == ["exchange", "token"]
+        assert search_terms("a !") == []
+
+    def test_search_within_scope(self) -> None:
+        intro, sections = parse_sections(DOC)
+        config = next(s for s in sections if s.number == "2")
+        hits = search_sections(DOC, intro, sections, "token", scope=config)
+        assert hits
+        assert all(h.section is not None and h.section.number.startswith("2") for h in hits)

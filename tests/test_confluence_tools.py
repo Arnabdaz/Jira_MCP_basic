@@ -361,3 +361,44 @@ class TestReviewFixes:
         assert "Topic 19" in text
         assert "Topic 25" not in text
         assert "280 more" in text
+
+
+class TestMinorFixes:
+    async def test_singular_forms_and_label_case(self) -> None:
+        body = "# One\n\n" + "a" * 2000 + "\n\n# Other\n\n" + "b" * 50
+        text = await _read(_page(body=body), section="2", part=5, max_chars=1000)
+        assert "Part 5 does not exist: Section 2: Other has 1 part." in text
+
+    async def test_singular_section_count(self) -> None:
+        body = "intro\n\n# Only\n\n" + "z" * 3000
+        text = await _read(_page(body=body), max_chars=1000)
+        assert "1 section)" in text
+
+    async def test_outline_number_collision_note(self) -> None:
+        body = (
+            "# Overview\n\n" + "o" * 600 + "\n\n## Intro\n\nx\n\n## Details\n\ny\n\n"
+            "# 1.2 Legacy notes\n\n" + "l" * 600 + "\n"
+        )
+        text = await _read(_page(body=body), section="1.2", max_chars=5000)
+        assert "**Section 1.2: Details**" in text
+        assert 'own "1.2 Legacy notes" is section 2' in text
+
+    async def test_find_query_too_short(self) -> None:
+        text = await _read(_page(body=LONG_DOC), find="a !", max_chars=1000)
+        assert "too short" in text
+
+    async def test_find_within_section(self) -> None:
+        text = await _read(_page(body=LONG_DOC), find="knox", section="2", max_chars=1000)
+        assert "### 2 Configuration" in text
+        assert "### Intro" not in text
+        assert "within section 2" in text
+
+    async def test_outline_mode_respects_budget(self) -> None:
+        body = (
+            "i" * 2500
+            + "\n\n"
+            + "".join(f"# Section {i}\n\n" + "s" * 50 + "\n\n" for i in range(90))
+        )
+        text = await _read(_page(body=body), max_chars=1000)
+        assert "## Outline" in text
+        assert len(text) < 1000 + 900  # content within budget, plus fixed header/hints

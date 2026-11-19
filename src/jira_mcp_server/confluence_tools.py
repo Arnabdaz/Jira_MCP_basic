@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from mcp.types import ToolAnnotations
@@ -15,6 +16,7 @@ from .sections import (
     parse_sections,
     render_outline,
     search_sections,
+    search_terms,
     split_parts,
 )
 
@@ -114,8 +116,10 @@ async def read_confluence_page(
     Pages up to `max_chars` (default 15000) are returned whole. Longer pages
     return a numbered outline (section sizes) plus the intro; then:
       - `section="2.1"` (or a heading title) reads just that section,
-      - `find="keywords"` lists the best-matching sections with snippets,
-      - `part=2`, `3`, ... pages through text that has no headings to split on.
+      - `find="keywords"` lists the best-matching sections with snippets
+        (combine with `section` to search only within that section),
+      - `part=2`, `3`, ... pages through text without headings, or through a
+        long intro shown in outline mode (part 1 is the outline).
 
     For long docs, if you can delegate to a sub-agent, have it navigate the page
     with these options and return only the facts you need.
@@ -129,7 +133,8 @@ async def read_confluence_page(
         section: Section number from the outline (e.g. "2.1") or a heading title.
         find: Keywords to search for within the page.
         part: Which part to read when text is split into parts (default 1).
-        max_chars: Size budget for the returned content (default 15000).
+        max_chars: Approximate size budget for the returned content, excluding the
+            short page header and navigation hints (default 15000).
     """
     try:
         client = get_confluence_client()
@@ -153,31 +158,45 @@ def _page_header(doc: ConfluencePage) -> list[str]:
     return [f"# {doc.title}", f"**Link:** {doc.url}", "  |  ".join(meta), "", "---", ""]
 
 
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
 def _page_content(md: str, section: str | None, find: str | None, part: int, budget: int) -> str:
     intro, sections = parse_sections(md)
-    if find and find.strip():
-        return _render_find(md, intro, sections, find.strip())
+    query = find.strip() if find else ""
+    if query and not search_terms(query):
+        return f'Search query "{query}" is too short: use words of at least 2 characters.'
+
+    scope: Section | None = None
+    note = ""
     if section and section.strip():
-        matches = find_sections(sections, section)
+        wanted = section.strip()
+        matches = find_sections(sections, wanted)
         if not matches:
-            outline = render_outline(sections) or "(this page has no headings)"
-            return f'No section matches "{section.strip()}". Outline:\n\n{outline}'
+            outline = render_outline(sections, max_chars=budget) or "(this page has no headings)"
+            return f'No section matches "{wanted}". Outline:\n\n{outline}'
         if len(matches) > 1:
             listing = "\n".join(f"- {s.number} {s.title}" for s in matches[:_MAX_MATCHES])
             if len(matches) > _MAX_MATCHES:
                 listing += f"\n- … {len(matches) - _MAX_MATCHES} more (use a more specific title)"
             return (
-                f'Several sections match "{section.strip()}":\n\n{listing}\n\n'
+                f'Several sections match "{wanted}":\n\n{listing}\n\n'
                 "*Call again with the section number, e.g. "
                 f'`section="{matches[0].number}"`.*'
             )
-        s = matches[0]
-        return _render_scope(
-            text=md[s.start : s.end],
-            label=f"Section {s.number}: {s.title}",
-            children=children_of(sections, s),
-            lead=md[s.body_start : s.own_end].strip(),
-            section_arg=s.number,
+        scope = matches[0]
+        note = _number_collision_note(sections, scope, wanted)
+
+    if query:
+        return note + _render_find(md, intro, sections, query, scope)
+    if scope is not None:
+        return note + _render_scope(
+            text=md[scope.start : scope.end],
+            label=f"Section {scope.number}: {scope.title}",
+            children=children_of(sections, scope),
+            lead=md[scope.body_start : scope.own_end].strip(),
+            section_arg=scope.number,
             part=part,
             budget=budget,
         )
@@ -189,6 +208,22 @@ def _page_content(md: str, section: str | None, find: str | None, part: int, bud
         section_arg=None,
         part=part,
         budget=budget,
+    )
+
+
+def _number_collision_note(sections: list[Section], chosen: Section, wanted: str) -> str:
+    """Warn when an outline number also starts another heading ('1.2 Foo') in the page."""
+    number = wanted.rstrip(".")
+    if chosen.number != number:
+        return ""
+    own = re.compile(rf"^{re.escape(number)}(?:[.)]|\s|$)")
+    others = [s for s in sections if s is not chosen and own.match(s.title)]
+    if not others:
+        return ""
+    other = others[0]
+    return (
+        f"*Note: section numbers refer to this outline; the page's own "
+        f'"{other.title}" is section {other.number}.*\n\n'
     )
 
 
@@ -215,26 +250,28 @@ def _render_scope(
         if part > 1:
             index = part - 2
             if index >= len(lead_parts):
+                last = f" to `part={len(lead_parts) + 1}`" if len(lead_parts) > 1 else ""
                 return (
-                    f"Part {part} does not exist: the intro has {len(lead_parts)} "
-                    f"part(s), read with `{nav}part=2`"
-                    + (f" to `part={len(lead_parts) + 1}`." if len(lead_parts) > 1 else ".")
+                    f"Part {part} does not exist: the intro has "
+                    f"{_plural(len(lead_parts), 'part')}, read with `{nav}part=2`{last}."
                 )
             footer = f"*Intro part {index + 1} of {len(lead_parts)}.*"
             if index + 1 < len(lead_parts):
                 footer += f" *Call again with `{nav}part={part + 1}` to continue.*"
             return "\n".join([prefix + lead_parts[index], "", "---", footer, _NAV_HINT])
 
+        # Keep outline + intro preview within the budget (the intro gets at most a third).
+        shown = lead[: min(_INTRO_CHARS, budget // 3)]
         out = [
-            f"**{label} is long ({len(text):,} characters, {len(children)} sections). "
+            f"**{label} is long ({len(text):,} characters, "
+            f"{_plural(len(children), 'section')}). "
             "Showing the outline instead of the full text.**",
             "",
             "## Outline",
             "",
-            render_outline(children),
+            render_outline(children, max_chars=max(1, budget - len(shown))),
         ]
         if lead:
-            shown = lead[:_INTRO_CHARS]
             out += ["", "## Intro", "", shown]
             if len(lead) > len(shown):
                 out += [
@@ -247,7 +284,7 @@ def _render_scope(
 
     parts = split_parts(text, budget)
     if not 1 <= part <= len(parts):
-        return f"Part {part} does not exist: this {label.lower()} has {len(parts)} parts."
+        return f"Part {part} does not exist: {label} has {_plural(len(parts), 'part')}."
     out = [prefix + parts[part - 1], "", "---"]
     footer = f"*Part {part} of {len(parts)} ({len(text):,} characters in total).*"
     if part < len(parts):
@@ -256,14 +293,17 @@ def _render_scope(
     return "\n".join(out)
 
 
-def _render_find(md: str, intro: str, sections: list[Section], query: str) -> str:
-    hits = search_sections(md, intro, sections, query)
+def _render_find(
+    md: str, intro: str, sections: list[Section], query: str, scope: Section | None = None
+) -> str:
+    hits = search_sections(md, intro, sections, query, scope=scope)
+    where = f" within section {scope.number}" if scope else ""
     if not hits:
         outline = render_outline(sections)
-        return f'No matches for "{query}" in this page.' + (
+        return f'No matches for "{query}"{where or " in this page"}.' + (
             f"\n\nOutline:\n\n{outline}" if outline else ""
         )
-    out = [f'## Matches for "{query}"', ""]
+    out = [f'## Matches for "{query}"{where}', ""]
     for hit in hits:
         heading = f"{hit.section.number} {hit.section.title}" if hit.section else "Intro"
         out += [f"### {heading}", f"> {hit.snippet}", ""]

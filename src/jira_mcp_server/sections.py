@@ -57,6 +57,36 @@ def _strip_closing_hashes(title: str) -> str:
     return text
 
 
+def _is_inline_code(marker: str, rest: str) -> bool:
+    """A backtick 'fence' whose line contains another backtick is inline code (CommonMark)."""
+    return marker[0] == "`" and "`" in rest
+
+
+def _outline_heads(raw: list[tuple[int, str, int, int]]) -> list[tuple[int, str, int, int]]:
+    """Choose the numbered headings and give each its outline depth.
+
+    - A lone top-level heading that opens the page is its title, not a section.
+    - Only the first three heading levels present are numbered; deeper ones stay text.
+    - Depth follows real nesting (a stack of open ancestors), so a skipped level
+      ("# A" then "### B") numbers as 1 / 1.1, never 1.0.1, and a heading before the
+      first top-level one never gets a 0.
+    """
+    levels = sorted({r[0] for r in raw})
+    if len(levels) > 1 and raw[0][0] == levels[0] and sum(r[0] == levels[0] for r in raw) == 1:
+        levels = levels[1:]
+    kept = set(levels[:_MAX_DEPTH])
+    heads: list[tuple[int, str, int, int]] = []
+    open_levels: list[int] = []
+    for level, title, start, body_start in raw:
+        if level not in kept:
+            continue
+        while open_levels and open_levels[-1] >= level:
+            open_levels.pop()
+        open_levels.append(level)
+        heads.append((len(open_levels), title, start, body_start))
+    return heads
+
+
 def parse_sections(md: str) -> tuple[str, list[Section]]:
     """Split markdown into (intro, sections in document order). Code fences are skipped."""
     if not md:
@@ -65,10 +95,13 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
     raw: list[tuple[int, str, int, int]] = []  # (level, title, start, body_start)
     fence: str | None = None  # the open fence marker, e.g. "```" or "~~~~"
     pos = 0
-    for line in md.splitlines(keepends=True):
-        text = line.rstrip("\r\n")
+    # Split on "\n" only: str.splitlines also breaks on U+2028, \x0c, ... which
+    # markdown does not treat as line ends.
+    for line in md.split("\n"):
+        text = line.rstrip("\r")
+        line_end = min(pos + len(line) + 1, len(md))
         fence_match = _FENCE_RE.match(text)
-        if fence_match:
+        if fence_match and not _is_inline_code(fence_match.group(1), text[fence_match.end() :]):
             marker = fence_match.group(1)
             if fence is None:
                 fence = marker
@@ -78,11 +111,10 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
             match = _HEADING_RE.match(text)
             if match:
                 title = _strip_closing_hashes(match.group(2))
-                raw.append((len(match.group(1)), title, pos, pos + len(line)))
-        pos += len(line)
+                raw.append((len(match.group(1)), title, pos, line_end))
+        pos = line_end
 
-    depth_of = {lvl: i + 1 for i, lvl in enumerate(sorted({r[0] for r in raw})[:_MAX_DEPTH])}
-    heads = [(depth_of[lvl], title, s, b) for lvl, title, s, b in raw if lvl in depth_of]
+    heads = _outline_heads(raw)
     if not heads:
         return md.strip(), []
 
@@ -129,22 +161,47 @@ def _fmt_size(chars: int) -> str:
     return f"{chars:,} chars"
 
 
-def render_outline(sections: list[Section], max_entries: int = 80) -> str:
-    """Indented outline with numbers and sizes; collapses to two levels when too long."""
+def render_outline(
+    sections: list[Section], max_entries: int = 80, max_chars: int | None = None
+) -> str:
+    """Indented outline with numbers and sizes, kept within ``max_entries``/``max_chars``.
+
+    Too big: collapse to two levels, then one level, then list only the first
+    sections that fit. The trailing notes say what was left out.
+    """
     if not sections:
         return ""
     top = min(s.depth for s in sections)
+
+    def line(s: Section) -> str:
+        return f"{'  ' * (s.depth - top)}{s.number} {s.title} ({_fmt_size(s.size)})"
+
+    def fits(lines: list[str]) -> bool:
+        within_chars = max_chars is None or len("\n".join(lines)) <= max_chars
+        return len(lines) <= max_entries and within_chars
+
     shown = sections
-    note = ""
-    if len(sections) > max_entries:
-        shown = [s for s in sections if s.depth <= top + 1]
-        hidden = len(sections) - len(shown)
-        note = f"\n({hidden} deeper sections not shown; read a section to see its subsections)"
-        if len(shown) > max_entries:
-            note += f"\n({len(shown) - max_entries} more sections after these)"
-            shown = shown[:max_entries]
-    lines = [f"{'  ' * (s.depth - top)}{s.number} {s.title} ({_fmt_size(s.size)})" for s in shown]
-    return "\n".join(lines) + note
+    for depth_limit in (top + 1, top):
+        if fits([line(s) for s in shown]):
+            break
+        shown = [s for s in sections if s.depth <= depth_limit]
+    lines = [line(s) for s in shown]
+
+    notes: list[str] = []
+    hidden = len(sections) - len(shown)
+    if hidden:
+        notes.append(f"({hidden} deeper sections not shown; read a section to see its subsections)")
+    if not fits(lines):
+        kept: list[str] = []
+        for candidate in lines:
+            if not fits([*kept, candidate]):
+                break
+            kept.append(candidate)
+        notes.append(
+            f"({len(lines) - len(kept)} more sections not shown; use find= to locate them)"
+        )
+        lines = kept
+    return "\n".join(lines) + "".join(f"\n{n}" for n in notes)
 
 
 def find_sections(sections: list[Section], ref: str) -> list[Section]:
@@ -169,18 +226,34 @@ def _snippet(text: str, pos: int) -> str:
     return f"{'…' if start > 0 else ''}{body}{'…' if end < len(text) else ''}"
 
 
+def search_terms(query: str) -> list[str]:
+    """The query words used for searching (lowercased, 2+ characters, de-duplicated)."""
+    return sorted({w for w in re.findall(r"\w+", query.lower()) if len(w) >= _MIN_TERM_LEN})
+
+
 def search_sections(
-    md: str, intro: str, sections: list[Section], query: str, limit: int = 5
+    md: str,
+    intro: str,
+    sections: list[Section],
+    query: str,
+    limit: int = 5,
+    scope: Section | None = None,
 ) -> list[SearchHit]:
-    """Rank sections by how many query terms they contain, then by occurrences."""
-    words = re.findall(r"\w+", query.lower())
-    terms = sorted({w for w in words if len(w) >= _MIN_TERM_LEN})
+    """Rank sections by how many query terms they contain, then by occurrences.
+
+    With ``scope``, only that section and its subsections are searched.
+    """
+    terms = search_terms(query)
     if not terms:
         return []
-    phrase = " ".join(words)
+    phrase = " ".join(re.findall(r"\w+", query.lower()))
 
-    segments: list[tuple[Section | None, str]] = [(None, intro)]
-    segments += [(s, md[s.start : s.own_end]) for s in sections]
+    if scope is None:
+        segments: list[tuple[Section | None, str]] = [(None, intro)]
+        segments += [(s, md[s.start : s.own_end]) for s in sections]
+    else:
+        scoped = [scope, *children_of(sections, scope)]
+        segments = [(s, md[s.start : s.own_end]) for s in scoped]
 
     ranked: list[tuple[int, int, SearchHit]] = []
     for index, (section, text) in enumerate(segments):
