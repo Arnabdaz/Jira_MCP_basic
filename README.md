@@ -177,13 +177,15 @@ with section sizes plus the intro, and the agent then reads only what it needs:
 
 | Argument | Returns |
 |----------|---------|
-| `section="2.1"` or `section="Troubleshooting"` | Just that section (with its subsections). If it is still too long, its own outline. Ambiguous titles list the matches. |
-| `find="token exchange"` | The 5 best-matching sections, each with its number and a snippet. |
-| `part=2` | The next part, for text without headings (or a single huge section). |
+| `section="2.1"` or `section="Troubleshooting"` | Just that section (with its subsections). If it is still too long, its own outline. Ambiguous titles list up to 20 matches. |
+| `find="token exchange"` | The 5 best-matching sections, each with its number and a snippet. Add `section=` to search only within that section. |
+| `part=2`, `3`, … | Pages through text without headings, or a single huge section (with `section=`). In outline mode `part=1` is the outline and `part=2…` page through a long intro. |
 
-The outline numbers the first three heading levels; `#` lines inside code blocks
-are ignored. Agents that support sub-agents are told to delegate long-doc reading
-to one, so only the needed facts reach the main conversation.
+The outline numbers the first three heading levels by nesting (a lone title heading
+at the top isn't numbered) and stays within `max_chars`, collapsing to fewer levels
+for very large pages. `#` lines inside code blocks are ignored. Agents that support
+sub-agents are told to delegate long-doc reading to one, so only the needed facts
+reach the main conversation.
 
 ```json
 {

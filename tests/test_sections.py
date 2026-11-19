@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+import pytest
+
 from jira_mcp_server.sections import (
     children_of,
     find_sections,
@@ -402,3 +404,89 @@ class TestSearchScopeAndTerms:
         hits = search_sections(DOC, intro, sections, "token", scope=config)
         assert hits
         assert all(h.section is not None and h.section.number.startswith("2") for h in hits)
+
+
+class TestFenceLikeText:
+    """Regression (review 2): fence-like text after a pipe/list prefix hid later headings."""
+
+    def test_pipe_prefixed_fence_like_text_is_not_a_fence(self) -> None:
+        md = "# A\n\n| ``` | starts a code block |\n\n# B\n\nx\n\n# C\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B", "C"]
+
+    def test_list_prefixed_fence_like_text_is_not_a_fence(self) -> None:
+        md = "# A\n\n- ~~~ looks like a fence\n\n# B\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B"]
+
+    def test_quote_prefixed_fence_is_still_tracked(self) -> None:
+        md = "# A\n\n> ```\n> # inside a quoted code block\n> ```\n\n# B\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B"]
+
+    def test_closing_fence_must_have_nothing_after_it(self) -> None:
+        md = "# A\n\n```\ncode\n```python\n# not heading\n```\n\n# B\n"
+        assert [s.title for s in parse_sections(md)[1]] == ["A", "B"]
+
+    def test_is_inline_code_rule(self) -> None:
+        from jira_mcp_server.sections import _is_inline_code
+
+        assert _is_inline_code("```", "js `x`") is True
+        assert _is_inline_code("```", "js") is False
+        assert _is_inline_code("~~~", " `x`") is False
+
+
+class TestSplitPartsPerformance:
+    def test_hard_cuts_are_linear(self) -> None:
+        """Regression (review 2): each hard cut copied the rest of the string."""
+
+        def run(n: int) -> None:
+            split_parts("x" * (n * 50), 1)
+
+        _assert_linear(run, 2_000)
+
+
+def _cell(*inline: dict[str, object]) -> dict[str, object]:
+    return {"type": "tableCell", "content": [{"type": "paragraph", "content": list(inline)}]}
+
+
+def _one_row_table(*inline: dict[str, object]) -> dict[str, object]:
+    return {"type": "table", "content": [{"type": "tableRow", "content": [_cell(*inline)]}]}
+
+
+FENCE_LIKE_BLOCKS = {
+    "cell with backticks": _one_row_table({"type": "text", "text": "```"}),
+    "cell with tildes": _one_row_table({"type": "text", "text": "~~~"}),
+    "cell with struck ~text": _one_row_table(
+        {"type": "text", "text": "~2d", "marks": [{"type": "strike"}]}
+    ),
+    "paragraph starting with backticks": _p("``` opens a code block"),
+    "bullet starting with backticks": {
+        "type": "bulletList",
+        "content": [{"type": "listItem", "content": [_p("```")]}],
+    },
+    "code block containing a fence": _code("Example:\n```\n# Not a heading", "markdown"),
+}
+
+
+@pytest.mark.parametrize("block", list(FENCE_LIKE_BLOCKS.values()), ids=list(FENCE_LIKE_BLOCKS))
+def test_fence_like_text_keeps_later_headings(block: dict[str, object]) -> None:
+    from jira_mcp_server.adf import extract_text
+
+    doc = {
+        "type": "doc",
+        "version": 1,
+        "content": [_h(1, "A"), block, _h(1, "B"), _p("x"), _h(1, "C")],
+    }
+    md = extract_text(doc) or ""
+    assert [s.title for s in parse_sections(md)[1]] == ["A", "B", "C"]
+
+
+class TestSplitPartsPacking:
+    def test_oversized_paragraph_fills_the_current_part_first(self) -> None:
+        parts = split_parts("# Title\n\n" + "w" * 250, 100)
+        assert parts[0].startswith("# Title\n\n")
+        assert len(parts[0]) == 100
+        assert "".join(parts).replace("\n", "") == "# Title" + "w" * 250
+
+    def test_tiny_budgets_terminate(self) -> None:
+        for budget in (0, 1, 2, 3, 4, 5):
+            parts = split_parts("a\n\n" + "b" * 10 + "\n\ncc", budget)
+            assert "".join(parts).replace("\n", "") == "a" + "b" * 10 + "cc"

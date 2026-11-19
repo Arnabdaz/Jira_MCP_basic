@@ -364,13 +364,13 @@ class TestReviewFixes:
 
 
 class TestMinorFixes:
-    async def test_singular_forms_and_label_case(self) -> None:
+    async def test_part_out_of_range_keeps_label_case(self) -> None:
         body = "# One\n\n" + "a" * 2000 + "\n\n# Other\n\n" + "b" * 50
         text = await _read(_page(body=body), section="2", part=5, max_chars=1000)
-        assert "Part 5 does not exist: Section 2: Other has 1 part." in text
+        assert "Part 5 does not exist: Section 2: Other fits in one part" in text
 
     async def test_singular_section_count(self) -> None:
-        body = "intro\n\n# Only\n\n" + "z" * 3000
+        body = "i" * 2500 + "\n\n# Only\n\n" + "z" * 3000
         text = await _read(_page(body=body), max_chars=1000)
         assert "1 section)" in text
 
@@ -402,3 +402,47 @@ class TestMinorFixes:
         text = await _read(_page(body=body), max_chars=1000)
         assert "## Outline" in text
         assert len(text) < 1000 + 900  # content within budget, plus fixed header/hints
+
+
+class TestReview2Fixes:
+    async def test_part2_without_intro_says_so(self) -> None:
+        body = "# A\n\n" + "a" * 3000 + "\n\n# B\n\n" + "b" * 3000
+        text = await _read(_page(body=body), max_chars=1000, part=2)
+        assert "no intro text" in text
+        assert "0 parts" not in text
+
+    async def test_part2_on_short_page(self) -> None:
+        text = await _read(_page(body="# A\n\nshort\n\n# B\n\nshort\n"), part=2)
+        assert "fits in one part" in text
+
+    async def test_collision_note_ignores_deeper_numbers(self) -> None:
+        body = (
+            "# Overview\n\n" + "o" * 600 + "\n\n## Intro\n\nx\n\n## Details\n\ny\n\n"
+            "# 1.2.3 Legacy\n\n" + "l" * 600 + "\n"
+        )
+        text = await _read(_page(body=body), section="1.2", max_chars=5000)
+        assert "**Section 1.2: Details**" in text
+        assert "Note:" not in text
+
+    async def test_no_match_outline_respects_budget_and_scope(self) -> None:
+        body = "# One\n\n" + "".join(f"## Sub {i}\n\n" + "s" * 40 + "\n\n" for i in range(200))
+        body += "# Two\n\n" + "t" * 40
+        text = await _read(_page(body=body), find="zzzz", section="1", max_chars=1000)
+        assert 'No matches for "zzzz" within section 1' in text
+        assert "2 Two" not in text
+        assert len(text) < 1000 + 600
+
+    async def test_outline_lists_more_than_80_sections_when_budget_allows(self) -> None:
+        body = "".join(f"# S{i}\n\n" + "x" * 80 + "\n\n" for i in range(200))
+        text = await _read(_page(body=body))
+        assert "## Outline" in text
+        assert "S199" in text
+
+    async def test_single_section_page_goes_straight_to_parts(self) -> None:
+        text = await _read(_page(body="# Title\n\n" + "w" * 20_000), max_chars=15_000)
+        assert "## Outline" not in text
+        assert "Part 1 of 2" in text
+
+    async def test_tiny_max_chars_is_raised_to_a_floor(self) -> None:
+        text = await _read(_page(body="x" * 1000), max_chars=1)
+        assert "Part 1 of 5" in text

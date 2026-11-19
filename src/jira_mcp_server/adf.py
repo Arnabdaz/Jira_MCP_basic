@@ -34,7 +34,7 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
         text: str = node.get("text", "")
         marks = {m["type"] for m in node.get("marks", [])}
         if "code" in marks:
-            text = f"`{text}`"
+            text = _inline_code(text)
         if "strong" in marks:
             text = f"**{text}**"
         if "em" in marks:
@@ -54,7 +54,7 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
         return text
 
     if node_type == "paragraph":
-        return _process_nodes(content, depth) + "\n\n"
+        return _escape_fence_like(_process_nodes(content, depth)) + "\n\n"
 
     if node_type == "heading":
         level: int = node.get("attrs", {}).get("level", 1)
@@ -87,7 +87,10 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
     if node_type == "codeBlock":
         lang: str = node.get("attrs", {}).get("language", "")
         inner = _process_nodes(content)
-        return f"```{lang}\n{inner}\n```\n\n"
+        # The fence must be longer than any backtick run inside, or an inner "```"
+        # line would close it early.
+        fence = "`" * max(3, _longest_backtick_run(inner) + 1)
+        return f"{fence}{lang}\n{inner}\n{fence}\n\n"
 
     if node_type == "blockquote":
         inner = _process_nodes(content).strip()
@@ -158,6 +161,40 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
     if content:
         return _process_nodes(content)
     return ""
+
+
+_FENCE_LIKE_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
+
+
+def _longest_backtick_run(text: str) -> int:
+    return max((len(run) for run in re.findall(r"`+", text)), default=0)
+
+
+def _inline_code(text: str) -> str:
+    """CommonMark inline code: a delimiter longer than any backtick run inside,
+    padded with spaces when the text starts or ends with a backtick."""
+    delimiter = "`" * (_longest_backtick_run(text) + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{delimiter}{pad}{text}{pad}{delimiter}"
+
+
+def _escape_fence_like(text: str) -> str:
+    """Escape paragraph lines that a markdown reader would take for a code fence.
+
+    A backtick line that also contains a later backtick is inline code, not a fence
+    (CommonMark), so it is left alone.
+    """
+
+    def escape(line: str) -> str:
+        match = _FENCE_LIKE_RE.match(line)
+        if not match:
+            return line
+        indent, marker, rest = match.groups()
+        if marker[0] == "`" and "`" in rest:
+            return line
+        return f"{indent}\\{marker}{rest}"
+
+    return "\n".join(escape(line) for line in text.split("\n"))
 
 
 def _item_sep(inner: str) -> str:

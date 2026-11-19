@@ -663,3 +663,39 @@ def test_table_cell_newlines_are_flattened_so_rows_stay_on_one_line() -> None:
     result = extract_text(adf) or ""
     assert "| first<br>## InCell<br>a\\|b |" in result
     assert not any(line.startswith("#") for line in result.splitlines())
+
+
+# ---------------------------------------------------------------------------
+# Fence-like text must not look like a code fence (review 2)
+# ---------------------------------------------------------------------------
+
+
+def test_paragraph_starting_with_backtick_fence_is_escaped() -> None:
+    result = extract_text(_doc(_para({"type": "text", "text": "``` opens a code block"}))) or ""
+    assert result.startswith("\\``` opens a code block")
+
+
+def test_strike_text_starting_with_tilde_is_escaped() -> None:
+    strike = {"type": "text", "text": "~2d", "marks": [{"type": "strike"}]}
+    assert (extract_text(_doc(_para(strike))) or "").startswith("\\~~~2d~~")
+
+
+def test_inline_code_with_backticks_uses_longer_delimiter() -> None:
+    def code(text: str) -> str:
+        node = {"type": "text", "text": text, "marks": [{"type": "code"}]}
+        return extract_text(_doc(_para(node))) or ""
+
+    assert code("```") == "```` ``` ````"
+    assert code("a`b") == "``a`b``"
+    assert code("plain") == "`plain`"
+
+
+def test_code_block_fence_is_longer_than_backtick_runs_inside() -> None:
+    block = {
+        "type": "codeBlock",
+        "attrs": {"language": "markdown"},
+        "content": [{"type": "text", "text": "Example:\n```\n# Not a heading"}],
+    }
+    result = extract_text(_doc(block)) or ""
+    assert result.startswith("````markdown\n")
+    assert result.rstrip().endswith("````")

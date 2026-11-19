@@ -24,6 +24,8 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 _DEFAULT_MAX_CHARS = 15_000  # ~4k tokens: keeps a single page read a modest share of context
 _INTRO_CHARS = 2_000
 _MAX_MATCHES = 20  # cap ambiguous-section listings so they can't flood the context
+_OUTLINE_MAX_ENTRIES = 1_000  # in tools the char budget, not an entry count, limits the outline
+_MIN_MAX_CHARS = 200  # tiny budgets only produce thousands of useless parts
 _NAV_HINT = (
     '*Read one section with `section="<number>"` (e.g. the number from the outline), '
     'or search this page with `find="keywords"`.*'
@@ -140,7 +142,8 @@ async def read_confluence_page(
         client = get_confluence_client()
         doc = await client.get_page(page)
         lines = _page_header(doc)
-        lines.append(_page_content(doc.body, section, find, part, max(1, max_chars)))
+        budget = max(_MIN_MAX_CHARS, max_chars)
+        lines.append(_page_content(doc.body, section, find, part, budget))
         return {"result": "\n".join(lines)}
     except Exception as e:
         return {"error": f"Error reading Confluence page: {e!s}"}
@@ -189,7 +192,7 @@ def _page_content(md: str, section: str | None, find: str | None, part: int, bud
         note = _number_collision_note(sections, scope, wanted)
 
     if query:
-        return note + _render_find(md, intro, sections, query, scope)
+        return note + _render_find(md, intro, sections, query, budget, scope)
     if scope is not None:
         return note + _render_scope(
             text=md[scope.start : scope.end],
@@ -216,7 +219,8 @@ def _number_collision_note(sections: list[Section], chosen: Section, wanted: str
     number = wanted.rstrip(".")
     if chosen.number != number:
         return ""
-    own = re.compile(rf"^{re.escape(number)}(?:[.)]|\s|$)")
+    # "1.2 Foo", "1.2. Foo", "1.2) Foo" match; "1.2.3 Foo" does not.
+    own = re.compile(rf"^{re.escape(number)}(?:[.)](?!\d)|\s|$)")
     others = [s for s in sections if s is not chosen and own.match(s.title)]
     if not others:
         return ""
@@ -239,15 +243,26 @@ def _render_scope(
 ) -> str:
     """Whole text if it fits; else an outline of its subsections; else numbered parts."""
     prefix = f"**{label}**\n\n" if section_arg else ""
-    if len(text) <= budget and part == 1:
-        return prefix + (text or "*[empty page]*")
+    if len(text) <= budget:
+        if part == 1:
+            return prefix + (text or "*[empty page]*")
+        return f"Part {part} does not exist: {label} fits in one part (read it without `part`)."
 
     nav = f'section="{section_arg}", ' if section_arg else ""
+    if len(children) == 1 and len(lead) <= _INTRO_CHARS:
+        # An outline with a single entry (e.g. a page whose only heading is its title)
+        # would just cost an extra call; page through the text directly.
+        children = []
     if children:
         # part=1 is the outline; part=2.. page through the intro/lead text, which
         # belongs to no subsection and would otherwise be unreachable.
-        lead_parts = split_parts(lead, budget) if lead else []
         if part > 1:
+            if not lead:
+                return (
+                    f"Part {part} does not exist: {label} has no intro text before its "
+                    'first section. Read a section with `section="<number>"`.'
+                )
+            lead_parts = split_parts(lead, budget)
             index = part - 2
             if index >= len(lead_parts):
                 last = f" to `part={len(lead_parts) + 1}`" if len(lead_parts) > 1 else ""
@@ -269,7 +284,11 @@ def _render_scope(
             "",
             "## Outline",
             "",
-            render_outline(children, max_chars=max(1, budget - len(shown))),
+            render_outline(
+                children,
+                max_entries=_OUTLINE_MAX_ENTRIES,
+                max_chars=max(1, budget - len(shown)),
+            ),
         ]
         if lead:
             out += ["", "## Intro", "", shown]
@@ -294,12 +313,18 @@ def _render_scope(
 
 
 def _render_find(
-    md: str, intro: str, sections: list[Section], query: str, scope: Section | None = None
+    md: str,
+    intro: str,
+    sections: list[Section],
+    query: str,
+    budget: int,
+    scope: Section | None = None,
 ) -> str:
     hits = search_sections(md, intro, sections, query, scope=scope)
     where = f" within section {scope.number}" if scope else ""
     if not hits:
-        outline = render_outline(sections)
+        outline_of = children_of(sections, scope) if scope else sections
+        outline = render_outline(outline_of, max_entries=_OUTLINE_MAX_ENTRIES, max_chars=budget)
         return f'No matches for "{query}"{where or " in this page"}.' + (
             f"\n\nOutline:\n\n{outline}" if outline else ""
         )

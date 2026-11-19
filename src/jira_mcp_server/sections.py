@@ -14,10 +14,11 @@ from dataclasses import dataclass
 # Linear-time on purpose: an overlapping form like `(.+?)[ \t#]*$` backtracks
 # quadratically on long lines of spaces/hashes. Closing hashes are stripped in Python.
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$")
-# A fence may follow list markers, quote markers or a table-cell pipe, because the ADF
-# converter can place a code block right after "- ", "2. " or "| ". Linear: every
-# repeated prefix must end in a fixed marker character.
-_FENCE_RE = re.compile(r"^[ \t]*(?:(?:[-*+>|]|\d+\.)[ \t]*)*(`{3,}|~{3,})")
+# A fence starts a line, optionally inside blockquotes/panels ("> "). List items and
+# table cells never carry one: the ADF converter starts a code-first list item on a
+# new line and flattens table cells onto one row, so fence-like text after "- " or
+# "| " is ordinary text. Linear: the repeated prefix is a fixed marker character.
+_FENCE_RE = re.compile(r"^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})")
 _MAX_DEPTH = 3  # number only the first three heading levels present
 _SNIPPET_RADIUS = 200
 _PHRASE_BONUS = 500
@@ -101,13 +102,16 @@ def parse_sections(md: str) -> tuple[str, list[Section]]:
         text = line.rstrip("\r")
         line_end = min(pos + len(line) + 1, len(md))
         fence_match = _FENCE_RE.match(text)
-        if fence_match and not _is_inline_code(fence_match.group(1), text[fence_match.end() :]):
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = marker
-            elif marker[0] == fence[0] and len(marker) >= len(fence):
-                fence = None  # only a same-character fence at least as long closes it
-        elif fence is None:
+        rest = text[fence_match.end() :] if fence_match else ""
+        if fence_match and fence is None and not _is_inline_code(fence_match.group(1), rest):
+            fence = fence_match.group(1)
+        elif fence is not None:
+            marker = fence_match.group(1) if fence_match else ""
+            # CommonMark: a closing fence uses the same character, is at least as long,
+            # and has nothing but whitespace after it ("```python" does not close).
+            if marker[:1] == fence[0] and len(marker) >= len(fence) and not rest.strip():
+                fence = None
+        elif fence_match is None:
             match = _HEADING_RE.match(text)
             if match:
                 title = _strip_closing_hashes(match.group(2))
@@ -274,24 +278,39 @@ def search_sections(
 
 def split_parts(text: str, max_chars: int) -> list[str]:
     """Split into parts of at most ``max_chars``, breaking at blank lines where possible."""
+    max_chars = max(1, max_chars)
     if len(text) <= max_chars:
         return [text]
     parts: list[str] = []
     current = ""
     for chunk in text.split("\n\n"):
-        para = chunk
-        while len(para) > max_chars:
-            if current:
-                parts.append(current)
-                current = ""
-            parts.append(para[:max_chars])
-            para = para[max_chars:]
-        candidate = f"{current}\n\n{para}" if current else para
+        if len(chunk) > max_chars:
+            # Hard-cut an oversized paragraph by index (no copying of the remainder),
+            # topping up the current part first unless little room is left in it.
+            start = 0
+            while start < len(chunk):
+                room = max_chars - (len(current) + 2) if current else max_chars
+                # max(1, ...): with a tiny budget, room 0 must still flush, or the
+                # empty slice would never advance `start`.
+                if current and room < max(1, max_chars // 4):
+                    parts.append(current)
+                    current = ""
+                    continue
+                piece = chunk[start : start + room]
+                start += len(piece)
+                joined = f"{current}\n\n{piece}" if current else piece
+                if start >= len(chunk):
+                    current = joined  # the tail may share a part with what follows
+                else:
+                    parts.append(joined)
+                    current = ""
+            continue
+        candidate = f"{current}\n\n{chunk}" if current else chunk
         if len(candidate) <= max_chars:
             current = candidate
         else:
             parts.append(current)
-            current = para
+            current = chunk
     if current:
         parts.append(current)
     return parts
