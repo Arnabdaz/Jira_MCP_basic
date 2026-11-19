@@ -8,6 +8,7 @@ import asyncio
 import os
 
 from jira_mcp_server.client import get_jira_client
+from jira_mcp_server.confluence import ConfluenceClient
 
 
 async def test_jira_connection() -> None:
@@ -36,6 +37,11 @@ async def test_jira_connection() -> None:
     client = get_jira_client()
     try:
         print("Jira client initialized successfully")
+
+        # Verify the credentials first: with an invalid/expired token some Jira
+        # endpoints answer anonymously (empty results) instead of failing.
+        me = await client.request_path("GET", "rest/api/3/myself")
+        print(f"Authenticated as: {me.get('displayName')} ({me.get('accountType')})")
 
         # Test getting user's work (returns a JiraSearchPage; total is approximate)
         print("\nTesting 'get_my_work' functionality...")
@@ -93,6 +99,32 @@ async def test_jira_connection() -> None:
         print(f"Found {len(projects)} accessible projects")
         for project in projects[:3]:
             print(f"  - {project.key}: {project.name} ({project.project_type})")
+
+        # Confluence (same site and credentials)
+        confluence = ConfluenceClient(client)
+        query = os.getenv("CONFLUENCE_TEST_QUERY", "design")
+        print(f"\nTesting Confluence search for {query!r}...")
+        found = await confluence.search(query=query, max_results=3)
+        print(f"Found about {found.total} results (showing {len(found.results)})")
+        for r in found.results:
+            print(f"  - [{r.space_key}] {r.title} (page id {r.id})")
+
+        page_ref = os.getenv("CONFLUENCE_TEST_PAGE") or (
+            found.results[0].id if found.results else None
+        )
+        if page_ref:
+            print(f"\nReading Confluence page {page_ref}...")
+            page = await confluence.get_page(page_ref)
+            print(
+                f"Read '{page.title}' in {page.space_key}: version {page.version}, "
+                f"{len(page.body)} characters of markdown"
+            )
+            children = await confluence.get_page_children(page.id, max_results=5)
+            print(f"Direct children: {len(children.children)}")
+
+        if issues:
+            linked = await confluence.get_issue_linked_pages(issues[0].key)
+            print(f"\nConfluence pages linked to {issues[0].key}: {len(linked)}")
 
         print("\nAll tests completed successfully!")
 

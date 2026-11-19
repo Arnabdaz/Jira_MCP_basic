@@ -481,6 +481,32 @@ class TestAsyncMethods:
             await self.client.get_issue("PROJ-999")
         assert "404" in str(exc_info.value)
         assert "Issue not found" in str(exc_info.value)
+        assert "JIRA_API_TOKEN" not in str(exc_info.value)
+
+    async def test_401_error_points_at_credentials(self) -> None:
+        import httpx
+
+        self.client.session = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.json.return_value = {"errorMessages": ["Client must be authenticated"]}
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=MagicMock(), response=mock_resp
+        )
+        self.client.session.request = AsyncMock(return_value=mock_resp)
+        with pytest.raises(JiraApiError) as exc_info:
+            await self.client.get_issue("PROJ-1")
+        assert exc_info.value.status_code == 401
+        assert "JIRA_API_TOKEN" in str(exc_info.value)
+        assert "expired" in str(exc_info.value)
+
+    async def test_request_path_is_site_relative(self) -> None:
+        self.client.session = AsyncMock()
+        self.client.session.request = AsyncMock(return_value=self._mock_response({"ok": 1}))
+        await self.client.request_path("GET", "/wiki/api/v2/spaces")
+        assert self.client.session.request.call_args.args[1] == (
+            "https://test.atlassian.net/wiki/api/v2/spaces"
+        )
 
     async def test_http_error_includes_errors_dict(self) -> None:
         import httpx

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jira-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server for Jira Cloud integration with personal API access"
 readme = "README.md"
 license = {text = "MIT"}

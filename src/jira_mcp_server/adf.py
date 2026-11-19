@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -39,6 +40,16 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
             text = f"*{text}*"
         if "strike" in marks:
             text = f"~~{text}~~"
+        href = next(
+            (
+                m.get("attrs", {}).get("href")
+                for m in node.get("marks", [])
+                if m.get("type") == "link"
+            ),
+            None,
+        )
+        if href:
+            text = f"[{text}]({href})"
         return text
 
     if node_type == "paragraph":
@@ -109,15 +120,51 @@ def _process_node(node: dict[str, Any], depth: int = 0) -> str:
         alt: str = node.get("attrs", {}).get("alt", "attachment")
         return f"[{alt}]"
 
-    if node_type == "expand":
+    if node_type in ("expand", "nestedExpand"):
         title: str = node.get("attrs", {}).get("title", "")
         inner = _process_nodes(content).strip()
         return f"**{title}**\n{inner}\n\n" if title else f"{inner}\n\n"
+
+    # Confluence macros. Bodied macros (e.g. panels, details) keep their content;
+    # body-less ones (toc, jira issue list, children...) would otherwise vanish silently.
+    if node_type in ("extension", "inlineExtension", "bodiedExtension"):
+        if content:
+            return _process_nodes(content, depth)
+        key: str = node.get("attrs", {}).get("extensionKey", "unknown")
+        return f"[macro: {key}]" if node_type == "inlineExtension" else f"[macro: {key}]\n\n"
+
+    if node_type == "status":
+        return f"[{node.get('attrs', {}).get('text', '')}]"
+
+    if node_type == "date":
+        return _format_date(node.get("attrs", {}).get("timestamp"))
+
+    if node_type == "emoji":
+        attrs = node.get("attrs", {})
+        return str(attrs.get("text") or attrs.get("shortName") or "")
+
+    if node_type in ("taskList", "decisionList"):
+        return _process_nodes(content, depth) + "\n"
+
+    if node_type == "taskItem":
+        box = "[x]" if node.get("attrs", {}).get("state") == "DONE" else "[ ]"
+        return f"{'  ' * depth}- {box} {_process_nodes(content, depth).strip()}\n"
+
+    if node_type == "decisionItem":
+        return f"{'  ' * depth}- Decision: {_process_nodes(content, depth).strip()}\n"
 
     # Unknown node type — recurse into children if present
     if content:
         return _process_nodes(content)
     return ""
+
+
+def _format_date(timestamp: Any) -> str:
+    """ADF date nodes carry a UTC epoch-milliseconds string; render as YYYY-MM-DD."""
+    try:
+        return datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
 
 
 def _process_ordered_list(items: list[dict[str, Any]], depth: int = 0) -> str:

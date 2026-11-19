@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import tools module to trigger @mcp.tool() registration via side effects
-from . import tools  # noqa: E402, F401
+from . import confluence_tools, tools  # noqa: E402, F401
 
 
 def main() -> None:

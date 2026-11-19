@@ -23,9 +23,7 @@ def test_paragraph() -> None:
     adf: dict[str, Any] = {
         "type": "doc",
         "version": 1,
-        "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "Hello world"}]}
-        ],
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hello world"}]}],
     }
     result = extract_text(adf)
     assert result is not None
@@ -142,9 +140,7 @@ def test_inline_code() -> None:
         "content": [
             {
                 "type": "paragraph",
-                "content": [
-                    {"type": "text", "text": "myFunc", "marks": [{"type": "code"}]}
-                ],
+                "content": [{"type": "text", "text": "myFunc", "marks": [{"type": "code"}]}],
             }
         ],
     }
@@ -431,9 +427,7 @@ def test_strike_mark() -> None:
         "content": [
             {
                 "type": "paragraph",
-                "content": [
-                    {"type": "text", "text": "deleted", "marks": [{"type": "strike"}]}
-                ],
+                "content": [{"type": "text", "text": "deleted", "marks": [{"type": "strike"}]}],
             }
         ],
     }
@@ -464,9 +458,7 @@ def test_nested_bullet_list_indentation() -> None:
                                         "content": [
                                             {
                                                 "type": "paragraph",
-                                                "content": [
-                                                    {"type": "text", "text": "Child"}
-                                                ],
+                                                "content": [{"type": "text", "text": "Child"}],
                                             }
                                         ],
                                     }
@@ -482,3 +474,156 @@ def test_nested_bullet_list_indentation() -> None:
     assert result is not None
     assert "- Parent" in result
     assert "  - Child" in result  # two-space indent for depth=1
+
+
+# ---------------------------------------------------------------------------
+# Confluence-heavy node types and marks
+# ---------------------------------------------------------------------------
+
+
+def _doc(*blocks: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "doc", "version": 1, "content": list(blocks)}
+
+
+def _para(*inline: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "paragraph", "content": list(inline)}
+
+
+def test_link_mark_renders_markdown_link() -> None:
+    adf = _doc(
+        _para(
+            {
+                "type": "text",
+                "text": "the RFC",
+                "marks": [{"type": "link", "attrs": {"href": "https://example.com/rfc"}}],
+            }
+        )
+    )
+    assert "[the RFC](https://example.com/rfc)" in (extract_text(adf) or "")
+
+
+def test_link_mark_combined_with_strong() -> None:
+    adf = _doc(
+        _para(
+            {
+                "type": "text",
+                "text": "docs",
+                "marks": [
+                    {"type": "strong"},
+                    {"type": "link", "attrs": {"href": "https://x.io"}},
+                ],
+            }
+        )
+    )
+    assert "[**docs**](https://x.io)" in (extract_text(adf) or "")
+
+
+def test_link_mark_without_href_keeps_text() -> None:
+    adf = _doc(_para({"type": "text", "text": "plain", "marks": [{"type": "link"}]}))
+    assert extract_text(adf) == "plain"
+
+
+def test_extension_macro_placeholder() -> None:
+    adf = _doc(
+        {
+            "type": "extension",
+            "attrs": {
+                "extensionType": "com.atlassian.confluence.macro.core",
+                "extensionKey": "toc",
+            },
+        }
+    )
+    assert "[macro: toc]" in (extract_text(adf) or "")
+
+
+def test_inline_extension_macro_placeholder() -> None:
+    adf = _doc(
+        _para(
+            {"type": "text", "text": "See "},
+            {"type": "inlineExtension", "attrs": {"extensionKey": "jira"}},
+        )
+    )
+    assert "See [macro: jira]" in (extract_text(adf) or "")
+
+
+def test_bodied_extension_keeps_inner_content() -> None:
+    adf = _doc(
+        {
+            "type": "bodiedExtension",
+            "attrs": {"extensionKey": "details"},
+            "content": [_para({"type": "text", "text": "Owner: team"})],
+        }
+    )
+    assert "Owner: team" in (extract_text(adf) or "")
+
+
+def test_status_lozenge() -> None:
+    adf = _doc(_para({"type": "status", "attrs": {"text": "IN PROGRESS", "color": "blue"}}))
+    assert "[IN PROGRESS]" in (extract_text(adf) or "")
+
+
+def test_date_renders_iso_day() -> None:
+    adf = _doc(_para({"type": "date", "attrs": {"timestamp": "1700000000000"}}))
+    assert "2023-11-14" in (extract_text(adf) or "")
+
+
+def test_date_with_bad_timestamp_is_skipped() -> None:
+    adf = _doc(
+        _para({"type": "text", "text": "x"}, {"type": "date", "attrs": {"timestamp": "nope"}})
+    )
+    assert extract_text(adf) == "x"
+
+
+def test_emoji_uses_text_then_shortname() -> None:
+    with_text = _doc(_para({"type": "emoji", "attrs": {"shortName": ":tada:", "text": "🎉"}}))
+    short_only = _doc(_para({"type": "emoji", "attrs": {"shortName": ":tada:"}}))
+    assert extract_text(with_text) == "🎉"
+    assert extract_text(short_only) == ":tada:"
+
+
+def test_task_list_checkboxes() -> None:
+    adf = _doc(
+        {
+            "type": "taskList",
+            "content": [
+                {
+                    "type": "taskItem",
+                    "attrs": {"state": "DONE"},
+                    "content": [{"type": "text", "text": "ship"}],
+                },
+                {
+                    "type": "taskItem",
+                    "attrs": {"state": "TODO"},
+                    "content": [{"type": "text", "text": "test"}],
+                },
+            ],
+        }
+    )
+    result = extract_text(adf) or ""
+    assert "- [x] ship" in result
+    assert "- [ ] test" in result
+
+
+def test_decision_list() -> None:
+    adf = _doc(
+        {
+            "type": "decisionList",
+            "content": [
+                {"type": "decisionItem", "content": [{"type": "text", "text": "Use OAuth"}]}
+            ],
+        }
+    )
+    assert "- Decision: Use OAuth" in (extract_text(adf) or "")
+
+
+def test_nested_expand_like_expand() -> None:
+    adf = _doc(
+        {
+            "type": "nestedExpand",
+            "attrs": {"title": "Details"},
+            "content": [_para({"type": "text", "text": "hidden"})],
+        }
+    )
+    result = extract_text(adf) or ""
+    assert "**Details**" in result
+    assert "hidden" in result

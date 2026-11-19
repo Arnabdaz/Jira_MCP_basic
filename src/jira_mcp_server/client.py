@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from .adf import extract_text
 
+_HTTP_UNAUTHORIZED = 401
+
 
 class JiraConfig(BaseModel):
     """Configuration for Jira personal API access."""
@@ -133,12 +135,19 @@ class JiraClient:
 
     async def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
         """Make an authenticated request to the Jira REST API v3."""
-        url = urljoin(f"{self.base_url}/", f"rest/api/3/{endpoint}")
+        return await self.request_path(method, f"rest/api/3/{endpoint}", **kwargs)  # type: ignore[no-any-return]
+
+    async def request_path(self, method: str, path: str, **kwargs: Any) -> Any:
+        """Make an authenticated request to a site-relative path (e.g. ``wiki/api/v2/...``).
+
+        Shared by the Jira and Confluence clients: same site, session and credentials.
+        """
+        url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         try:
             response = await self.session.request(method, url, **kwargs)
             response.raise_for_status()
             if response.headers.get("content-type", "").startswith("application/json"):
-                return response.json()  # type: ignore[no-any-return]
+                return response.json()
             msg = f"Unexpected non-JSON response (status {response.status_code})"
             raise JiraApiError(msg, response.status_code)
         except httpx.HTTPStatusError as e:
@@ -153,6 +162,11 @@ class JiraClient:
                     error_msg += f" - {errors}"
             except Exception:
                 error_msg += f" - {e.response.text}"
+            if e.response.status_code == _HTTP_UNAUTHORIZED:
+                error_msg += (
+                    " (check JIRA_EMAIL and JIRA_API_TOKEN; the API token may be expired or"
+                    " revoked, or be a scoped token, which does not work with the site URL)"
+                )
             raise JiraApiError(error_msg, e.response.status_code) from e
         except httpx.RequestError as e:
             msg = f"Network error: {e!s}"

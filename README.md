@@ -1,6 +1,6 @@
 # Jira MCP Server
 
-A Model Context Protocol (MCP) server for integrating with Jira Cloud using personal API tokens. This server provides read-only tools for AI agents to understand Jira tickets, search issues, and explore projects.
+A Model Context Protocol (MCP) server for integrating with Jira Cloud and Confluence Cloud using personal API tokens. This server provides read-only tools for AI agents to understand Jira tickets, search issues, explore projects, and find, search and read Confluence documentation.
 
 ## Features
 
@@ -9,7 +9,13 @@ A Model Context Protocol (MCP) server for integrating with Jira Cloud using pers
 - **Get My Work** — Issues assigned to the current user, with optional status filter and pagination
 - **Get Issue Comments** — All comments in chronological order with pagination
 - **Get Projects** — List all accessible Jira projects
+- **Search Confluence** — Full-text or CQL search over pages and blog posts, optionally per space
+- **Read Confluence Pages** — Full page content as markdown, by page id or URL
+- **Browse Confluence** — List a page's child pages to walk a documentation tree
+- **Ticket → Docs** — Confluence pages linked from a Jira issue (design docs, RFCs, runbooks)
 - **Personal API Access** — Secure authentication using your personal API token
+
+Confluence uses the **same site, email and API token** as Jira — no extra configuration.
 
 All tools are read-only (`readOnlyHint: true`).
 
@@ -147,6 +153,47 @@ List all accessible Jira projects (key, name, type, lead).
 { "tool": "get_projects", "arguments": {} }
 ```
 
+### `search_confluence`
+
+Full-text search over Confluence pages and blog posts, optionally limited to a
+space. Pass `cql` instead of `query` for a raw
+[CQL](https://developer.atlassian.com/cloud/confluence/advanced-searching-using-cql/)
+expression. Results include page ids, space, last-modified time and a highlighted excerpt.
+
+```json
+{ "tool": "search_confluence", "arguments": { "query": "token exchange", "space_key": "ENG" } }
+{ "tool": "search_confluence", "arguments": { "cql": "title ~ \"RFC\" AND label = \"design\"" } }
+```
+
+### `read_confluence_page`
+
+Full page content as markdown (headings, lists, tables, code, links, panels,
+status labels, task lists; body-less macros appear as `[macro: name]`). Accepts a
+page id or full page URL. Long pages are truncated at `max_chars` (default 40000).
+
+```json
+{
+  "tool": "read_confluence_page",
+  "arguments": { "page": "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Setup+Guide" }
+}
+```
+
+### `get_confluence_page_children`
+
+Direct children (pages, folders) of a page, with cursor pagination.
+
+```json
+{ "tool": "get_confluence_page_children", "arguments": { "page": "12345" } }
+```
+
+### `get_issue_confluence_pages`
+
+Confluence pages linked from a Jira issue.
+
+```json
+{ "tool": "get_issue_confluence_pages", "arguments": { "issue_key": "PROJ-123" } }
+```
+
 ## Pagination
 
 `search_jira_issues` and `get_my_work` use Jira's enhanced search
@@ -176,6 +223,18 @@ All calls go to Jira Cloud REST API v3:
 | `search_jira_issues`, `get_my_work` | `POST /rest/api/3/search/jql`, `POST /rest/api/3/search/approximate-count` |
 | `get_issue_comments` | `GET /rest/api/3/issue/{key}/comment` |
 | `get_projects` | `GET /rest/api/3/project/search` |
+| `get_issue_confluence_pages` | `GET /rest/api/3/issue/{key}/remotelink` |
+
+`search_confluence` and `get_confluence_page_children` paginate with a `cursor`
+value, given in the response when more results exist.
+
+### Confluence API endpoints used
+
+| Tool | Endpoint |
+|------|----------|
+| `search_confluence` | `GET /wiki/rest/api/search` (REST v1 — Confluence v2 has no search) |
+| `read_confluence_page` | `GET /wiki/api/v2/pages/{id}?body-format=atlas_doc_format`, `GET /wiki/api/v2/spaces/{id}` |
+| `get_confluence_page_children` | `GET /wiki/api/v2/pages/{id}/direct-children` |
 
 ## JQL Examples
 
@@ -199,12 +258,16 @@ jira-mcp/
 │       ├── __main__.py      # python -m jira_mcp_server support
 │       ├── server.py        # Entry point + CLI argument parsing
 │       ├── app.py           # FastMCP instance + lifespan hook
-│       ├── tools.py         # MCP tool definitions
-│       ├── client.py        # JiraClient + data models
-│       └── adf.py           # ADF → markdown converter
+│       ├── tools.py             # Jira MCP tool definitions
+│       ├── confluence_tools.py  # Confluence MCP tool definitions
+│       ├── client.py            # JiraClient + data models (shared HTTP session)
+│       ├── confluence.py        # ConfluenceClient (reuses JiraClient session/auth)
+│       └── adf.py               # ADF → markdown converter (Jira + Confluence)
 └── tests/
     ├── test_adf.py
     ├── test_client.py
+    ├── test_confluence.py
+    ├── test_confluence_tools.py
     └── test_tools.py
 ```
 
@@ -231,9 +294,24 @@ uv run black src/ tests/
 
 **"Missing environment variables"** — Check all three env vars are set with correct names.
 
-**"Jira API error: 401"** — Verify your API token and email are correct.
+**"Jira API error: 401"** — Verify your API token and email are correct. Atlassian
+API tokens expire (at most one year), so an old token may need regenerating. Use a
+regular API token: tokens created "with scopes" don't work with the site URL.
 
-**"No issues found"** — Check your JQL syntax; try `assignee = currentUser()` first.
+**"No issues found" when you expect results** — Check your JQL syntax; try
+`assignee = currentUser()` first. If credentials are invalid, Jira may answer some
+requests anonymously (empty results, or "issue does not exist") instead of failing
+with 401 — so if a ticket you can open in the browser comes back missing, regenerate
+the API token.
+
+**"Current user not permitted to use Confluence" (403)** — Your Atlassian account
+has no Confluence access on this site, or the token is invalid.
+
+**"Not Found" (404) reading a page** — The page id is wrong, or you lack permission
+to view it (Confluence reports restricted pages as not found).
+
+**Short links** — `/wiki/x/...` links are not supported; open the page and copy its
+full URL, or use the numeric page id.
 
 ## License
 
