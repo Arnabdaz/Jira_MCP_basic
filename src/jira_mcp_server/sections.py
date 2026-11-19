@@ -240,6 +240,7 @@ def search_sections(
     intro: str,
     sections: list[Section],
     query: str,
+    *,
     limit: int = 5,
     scope: Section | None = None,
 ) -> list[SearchHit]:

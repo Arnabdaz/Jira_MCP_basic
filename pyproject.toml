@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.9.0",
+    "mcp>=2.3,<3",  # MCP SDK 2.x API (MCPServer / lowlevel handlers)
     "httpx>=0.28.0",
     "pydantic>=2.0.0",
 ]

@@ -329,7 +329,7 @@ class TestRegistration:
         ):
             assert name in tools, name
             assert tools[name].annotations is not None
-            assert tools[name].annotations.readOnlyHint is True
+            assert tools[name].annotations.read_only_hint is True
 
 
 class TestReviewFixes:

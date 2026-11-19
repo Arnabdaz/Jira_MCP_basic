@@ -48,7 +48,7 @@ class _Router:
 
     async def __call__(self, method: str, url: str, **kwargs: Any) -> MagicMock:
         self.calls.append((method, url, kwargs))
-        path = url.split("?")[0]
+        path = url.split("?", maxsplit=1)[0]
         for suffix, data in self.routes.items():
             if path.endswith(suffix):
                 if isinstance(data, Exception):

@@ -20,7 +20,7 @@ from .sections import (
     split_parts,
 )
 
-_READ_ONLY = ToolAnnotations(readOnlyHint=True)
+_READ_ONLY = ToolAnnotations(read_only_hint=True)
 _DEFAULT_MAX_CHARS = 15_000  # ~4k tokens: keeps a single page read a modest share of context
 _INTRO_CHARS = 2_000
 _MAX_MATCHES = 20  # cap ambiguous-section listings so they can't flood the context
@@ -192,7 +192,7 @@ def _page_content(md: str, section: str | None, find: str | None, part: int, bud
         note = _number_collision_note(sections, scope, wanted)
 
     if query:
-        return note + _render_find(md, intro, sections, query, budget, scope)
+        return note + _render_find(md, intro, sections, query, budget=budget, scope=scope)
     if scope is not None:
         return note + _render_scope(
             text=md[scope.start : scope.end],
@@ -317,6 +317,7 @@ def _render_find(
     intro: str,
     sections: list[Section],
     query: str,
+    *,
     budget: int,
     scope: Section | None = None,
 ) -> str:

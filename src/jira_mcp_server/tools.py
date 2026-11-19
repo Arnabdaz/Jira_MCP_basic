@@ -9,7 +9,7 @@ from mcp.types import ToolAnnotations
 from .app import mcp
 from .client import get_jira_client
 
-_READ_ONLY = ToolAnnotations(readOnlyHint=True)
+_READ_ONLY = ToolAnnotations(read_only_hint=True)
 _BYTES_PER_KB = 1024
 
 
@@ -70,7 +70,11 @@ async def read_jira_issue(issue_key: str) -> dict[str, Any]:
         if issue.attachments:
             lines += ["", "## Attachments"]
             for att in issue.attachments:
-                size_str = f"{att.size} B" if att.size < _BYTES_PER_KB else f"{att.size // _BYTES_PER_KB} KB"
+                size_str = (
+                    f"{att.size} B"
+                    if att.size < _BYTES_PER_KB
+                    else f"{att.size // _BYTES_PER_KB} KB"
+                )
                 lines.append(f"- [{att.filename}]({att.url}) ({size_str})")
 
         if issue.sub_tasks:
@@ -250,9 +254,7 @@ async def get_projects() -> dict[str, Any]:
         lines: list[str] = [f"# Jira Projects ({len(projects)} total)", ""]
         for project in projects:
             lead_str = f"  |  **Lead:** {project.lead}" if project.lead else ""
-            lines.append(
-                f"- **{project.key}** — {project.name} ({project.project_type}){lead_str}"
-            )
+            lines.append(f"- **{project.key}** — {project.name} ({project.project_type}){lead_str}")
         return {"result": "\n".join(lines)}
     except Exception as e:
         return {"error": f"Error getting projects: {e!s}"}
